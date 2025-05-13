@@ -1,0 +1,23 @@
+# Ignore large files
+*.pth
+*.h5
+*.onnx
+*.ckpt
+*.pb
+__pycache__/
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+#Ignore env files
+*_env
+.env
+# Ignore dataset files
+data/
+pars_CT/
+test_dataset_output/
+batch*
+.dcm
+.nrrd
+.nii
