@@ -94,23 +94,21 @@ pre_seg_transforms = monai.transforms.Compose([
     Spacing(pixdim=(1.0, 1.0, 1.0), mode="bilinear")
 ])
 
-
-
 model = UNETR(
     in_channels=1,
-    out_channels=14,  # BTCV has 13 organs + background
-    img_size=(128, 128, 128),
+    out_channels=14,
+    img_size=(96, 96, 96),
     feature_size=16,
     hidden_size=768,
     mlp_dim=3072,
     num_heads=12,
-    # pos_embed='perceptron',
+    #pos_embed='perceptron',
     norm_name='instance',
     res_block=True,
     dropout_rate=0.0,
 )
 
-model.load_state_dict(torch.load("./unetr_model/UNETR_model_best_acc.pt"))
+model.load_state_dict(torch.load("unetr_model/UNETR_model_best_acc.pth"))
 model.eval().cuda()
 
 from pathlib import Path
