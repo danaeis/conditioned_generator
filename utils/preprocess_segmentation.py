@@ -1,167 +1,242 @@
 import os
-import pandas as pd
-import SimpleITK as sitk
-import numpy as np
-from tqdm import tqdm
-from collections import defaultdict
 import json
-
+import pickle
+import numpy as np
 import torch
-import nibabel as nib
-from monai.transforms import Orientation, Spacing, ScaleIntensity
-from transformers import AutoModelForImageSegmentation
-import monai
-from huggingface_hub import hf_hub_download
+import SimpleITK as sitk
+from tqdm import tqdm
+import logging
+
+from volume_utils import resample_to_k_slices, get_crop_bounds, save_image
+
 from monai.bundle import ConfigParser
-from monai.networks.nets import SwinUNETR
-import torch
-from monai.networks.nets import UNETR
+from monai.transforms import Compose, LoadImage, EnsureChannelFirst, ScaleIntensity
+from monai.data import NibabelReader
 
-from dicom_utils import load_dicom_series
-from volume_utils import crop_center, resample_to_target, resample_spacing, detect_abdomen_bbox
-from registration_utils import register_to_atlas, save_registered_image
+from monai.inferers import sliding_window_inference
+from monai.transforms import Compose, ScaleIntensity, EnsureChannelFirst, Resize
+from monai.networks.nets import UNet  # replace with actual model if different
 from load_and_cache_dicom_series import load_and_cache_dicom_series
 
-
-def save_abdomen_bounds(seg_mask, sitk_img, dicom_series_dir, included_labels, z_margin=5):
-    """
-    Save slice range for specified label(s) into a JSON file.
-    
-    Args:
-        seg_mask (np.ndarray): 3D array [H, W, Z]
-        sitk_img (SimpleITK.Image): Original volume (for metadata if needed)
-        dicom_series_dir (str): Path to the SeriesInstanceUID folder
-        included_labels (set): e.g., {1, 2, 3, 4} (use BTCV label IDs for organs)
-        z_margin (int): Margin slices above and below the bounding box
-    """
-    # Convert to [Z, H, W] for axis operations
-    seg_mask = np.transpose(seg_mask, (2, 0, 1))  # (Z, H, W)
-    mask = np.isin(seg_mask, list(included_labels))  # Boolean mask of relevant labels
-
-    z_mask = np.any(mask, axis=(1, 2))  # Along H and W
-    if not np.any(z_mask):
-        z_min, z_max = 0, seg_mask.shape[0] - 1
-    else:
-        z_indices = np.where(z_mask)[0]
-        z_min = max(z_indices[0] - z_margin, 0)
-        z_max = min(z_indices[-1] + z_margin, seg_mask.shape[0] - 1)
-
-    # Save to same directory as DICOM series
-    output_path = os.path.join(dicom_series_dir, "abdominal_bounds.json")
-    with open(output_path, "w") as f:
-        json.dump({"z_min": int(z_min), "z_max": int(z_max)}, f, indent=2)
-
-
-def resample_to_250_slices(volume, original_spacing, target_slices=250):
-    size = volume.GetSize()
-    spacing = list(original_spacing)
-    new_spacing = list(spacing)
-    new_spacing[2] = spacing[2] * size[2] / target_slices
-    return resample_spacing(volume, tuple(new_spacing))
-
-def crop_abdomen_from_seg(seg_mask, z_margin=5):
-    z_mask = np.any(seg_mask > 0, axis=(0, 1))
-    if not np.any(z_mask):
-        return 0, seg_mask.shape[2]  # fallback to full volume
-    z_indices = np.where(z_mask)[0]
-    z_min = max(z_indices[0] - z_margin, 0)
-    z_max = min(z_indices[-1] + z_margin + 1, seg_mask.shape[2])
-    return z_min, z_max
-
-
 # --- CONFIG ---
-BATCH_DIR = '../../ncct_cect/vindr_ds/batches'
-LABELS_CSV = '../../ncct_cect/vindr_ds/labels.csv'
-ALIGNED_SLICES_DIR = '../../ncct_cect/vindr_ds/aligned_slices'
-REGISTERED_DIR = '../../ncct_cect/vindr_ds/registered_volumes'
-ATLAS_SAVE_PATH = '../../ncct_cect/vindr_ds/atlas/reference.nii.gz'
-CACHE_PATH = '../../ncct_cect/vindr_ds/cached_dicom_series.pkl'
-
-STANDARD_SPACING = (1.0, 1.0, 1.0)
-FIXED_SHAPE = (192, 192, 64)
-TRANSFORM_TYPE = 'rigid'
-
-dicom_series, z_spacings = load_and_cache_dicom_series(BATCH_DIR, LABELS_CSV, CACHE_PATH)
-print("dicom series loaded")
-
-
-
-# Define preprocessing (must match bundle settings)
-pre_seg_transforms = monai.transforms.Compose([
-    Orientation(axcodes="RAS"),
-    ScaleIntensity(),
-    monai.transforms.EnsureChannelFirst(),
-    Spacing(pixdim=(1.0, 1.0, 1.0), mode="bilinear")
-])
-
-model = UNETR(
-    in_channels=1,
-    out_channels=14,
-    img_size=(96, 96, 96),
-    feature_size=16,
-    hidden_size=768,
-    mlp_dim=3072,
-    num_heads=12,
-    #pos_embed='perceptron',
-    norm_name='instance',
-    res_block=True,
-    dropout_rate=0.0,
+from monai.transforms import (
+    LoadImaged,
+    EnsureChannelFirst,
+    Orientation,
+    Spacing,
+    ScaleIntensityRange,
+    EnsureType,
+    Compose,
 )
 
-model.load_state_dict(torch.load("unetr_model/UNETR_model_best_acc.pth"))
+BATCH_DIR = '../../ncct_cect/vindr_ds/batches'
+LABELS_CSV = '../../ncct_cect/vindr_ds/labels.csv'
+CACHE_PATH = '../../ncct_cect/vindr_ds/cached_dicom_series.pkl'
+
+ALIGNED_SLICES_DIR = 'debug/ncct_cect/vindr_ds/aligned_slices'
+CROPPED_DIR = 'debug/ncct_cect/vindr_ds/cropped_volumes'
+RESAMPLED_DIR = 'debug/ncct_cect/vindr_ds/resampled_volumes'  # New directory for resampled volumes
+SEGMENTATION_DIR = 'debug/ncct_cect/vindr_ds/segmentation_masks'  # New directory for segmentation masks
+ORIGINAL_DIR = 'debug/ncct_cect/vindr_ds/original_volumes'  # New directory for original volumes
+
+STANDARD_SPACING = (1.0, 1.0, 1.0)
+TARGET_SLICE_NUM = 128
+
+# Labels to keep for cropping (example: BTCV labels excluding arteries)
+INCLUDED_LABELS = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+Z_MARGIN = 5
+
+# Load pretrained MONAI model from bundle path
+MODEL_DIR = "bundles/multi_organ_segmentation"
+CONFIG_PATH = f"{MODEL_DIR}/configs/inference.yaml"
+META_PATH = f"{MODEL_DIR}/configs/metadata.json"
+
+# Placeholder preprocessing transforms
+pre_seg_transforms = Compose([
+    EnsureChannelFirst(channel_dim=0),  # For arrays
+    Orientation(axcodes="RAS"),
+    Spacing(pixdim=(1.0, 1.0, 1.0), mode="bilinear"),
+    ScaleIntensityRange(a_min=-500, a_max=500, b_min=0.0, b_max=1.0, clip=True),
+    EnsureType(),
+])
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('preprocessing.log'),
+        logging.StreamHandler()
+    ]
+)
+
+# Create all necessary directories
+for dir_path in [CROPPED_DIR, RESAMPLED_DIR, SEGMENTATION_DIR, ORIGINAL_DIR]:
+    os.makedirs(dir_path, exist_ok=True)
+    logging.info(f"Created directory: {dir_path}")
+
+
+# Load MONAI model from bundle
+config = ConfigParser()
+config.read_config(CONFIG_PATH)
+
+# Get the network and preprocessing transforms from config
+model = config.get_parsed_content("network")
+preprocessing = config.get_parsed_content("preprocessing")
+
+# Move model to GPU and set to eval mode
 model.eval().cuda()
 
-from pathlib import Path
+dicom_series, z_spacings = load_and_cache_dicom_series(BATCH_DIR, LABELS_CSV, CACHE_PATH)
+logging.info("DICOM series loaded successfully")
 
-# Set of label IDs to include for bounding box (BTCV or AMOS label IDs)
-included_labels = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13}  # Exclude arteries (e.g. 4)
+slice_counts = []
 
 for study_uid, series_uid, volume in tqdm(dicom_series):
-    spacing = volume.GetSpacing()
+    logging.info(f"\nProcessing volume: {study_uid}_{series_uid}")
+    
+    # Save original volume
+    original_save_name = f"{study_uid}_{series_uid}_original"
+    save_image(volume, ORIGINAL_DIR, original_save_name, "volume")
+    
+    # Step 1: Resample to target slices
+    logging.info("Step 1: Resampling volume")
+    vol_resampled = resample_to_k_slices(volume, TARGET_SLICE_NUM)
+    
+    # Save resampled volume
+    resampled_save_name = f"{study_uid}_{series_uid}_resampled"
+    save_image(vol_resampled, RESAMPLED_DIR, resampled_save_name, "volume")
+    
+    resampled_path = os.path.join(RESAMPLED_DIR, f"{resampled_save_name}.nii.gz")
+    # Load the image first
+    vol_sitk = sitk.ReadImage(resampled_path)
+    vol_np = sitk.GetArrayFromImage(vol_sitk).astype(np.float32)  # (H, W, Z)
+    
+    # Add logging to check dimensions
+    logging.info(f"Original volume shape: {vol_np.shape}")
+    
+    # Transpose from (H, W, Z) to (Z, H, W)
+    vol_np = np.transpose(vol_np, (2, 0, 1))  # Reorder dimensions to (Z, H, W)
+    logging.info(f"Volume shape after transpose: {vol_np.shape}")
+    
+    # Ensure correct dimensions (Z, H, W) -> (1, Z, H, W)
+    if len(vol_np.shape) == 3:
+        vol_np = np.expand_dims(vol_np, axis=0)  # Add channel dimension
+    logging.info(f"Volume shape after adding channel: {vol_np.shape}")
+    
+    # Apply preprocessing transforms
+    preprocessed = pre_seg_transforms(vol_np)
+    logging.info(f"Volume shape after preprocessing: {preprocessed.shape}")
+    
+    # Convert MetaTensor to numpy array first, then to torch tensor
+    if hasattr(preprocessed, 'numpy'):
+        preprocessed = preprocessed.numpy()
+    vol_tensor = torch.from_numpy(preprocessed).cuda()
+    # Add batch dimension for 5D input (batch, channel, depth, height, width)
+    vol_tensor = vol_tensor.unsqueeze(0)  # Add batch dimension
+    logging.info(f"Final tensor shape: {vol_tensor.shape}")
 
-    # Step 1: Resample to 250 slices
-    vol_250 = resample_to_250_slices(volume, spacing)
-
-    # Step 2: Preprocess image for model
-    vol_np = sitk.GetArrayFromImage(vol_250).astype(np.float32)  # (Z, H, W)
-    vol_np = np.transpose(vol_np, (1, 2, 0))  # (H, W, Z)
-    vol_tensor = pre_seg_transforms(vol_np).unsqueeze(0).cuda()  # (1, 1, H, W, Z)
-
-    # Step 3: Run segmentation
+    # Step 2: Inference segmentation
+    logging.info("Step 2: Performing segmentation")
     with torch.no_grad():
-        output = model(vol_tensor)
-        seg_mask = torch.argmax(output, dim=1).squeeze().cpu().numpy()  # (H, W, Z)
+        # Log input tensor properties
+        logging.info(f"Input tensor shape: {vol_tensor.shape}")
+        logging.info(f"Input tensor range: [{vol_tensor.min():.2f}, {vol_tensor.max():.2f}]")
+        
+        # Use the same ROI size as in the model config
+        roi_size = (96, 96, 96)  # 3D ROI size as specified in the model config
+        logging.info(f"Using ROI size: {roi_size}")
+        
+        # Perform sliding window inference with model's recommended settings
+        seg_output = sliding_window_inference(
+            vol_tensor, 
+            roi_size=roi_size, 
+            sw_batch_size=4,  # As specified in model config
+            predictor=model,
+            overlap=0.625,    # As specified in model config
+            mode="gaussian",  # Use Gaussian weighting for smoother boundaries
+            sw_device=torch.device("cuda")
+        )
+        
+        # Apply postprocessing as specified in model config
+        seg_output = torch.softmax(seg_output, dim=1)  # Apply softmax
+        seg_mask = torch.argmax(seg_output, dim=1).squeeze().cpu().numpy()
+        
+        # Verify segmentation mask
+        logging.info(f"Segmentation mask shape: {seg_mask.shape}")
+        logging.info(f"Unique labels in segmentation: {np.unique(seg_mask)}")
+        logging.info(f"Label counts: {np.bincount(seg_mask.flatten())}")
+        
+        # Transpose segmentation mask to match original volume orientation (H, W, Z)
+        seg_mask = np.transpose(seg_mask, (1, 2, 0))  # From (Z, H, W) to (H, W, Z)
+        logging.info(f"Transposed segmentation mask shape: {seg_mask.shape}")
+        
+        # Save raw segmentation output for inspection
+        raw_seg = seg_output[0, 0].cpu().numpy()
+        raw_seg = np.transpose(raw_seg, (1, 2, 0))  # From (Z, H, W) to (H, W, Z)
+        raw_seg_save_name = f"{study_uid}_{series_uid}_raw_segmentation"
+        save_image(raw_seg, SEGMENTATION_DIR, raw_seg_save_name, "volume", vol_resampled)
+        
+        # Save segmentation mask
+        seg_save_name = f"{study_uid}_{series_uid}_segmentation"
+        save_image(seg_mask, SEGMENTATION_DIR, seg_save_name, "segmentation", vol_resampled)
+        
+        # Save overlay of segmentation on resampled volume
+        # Convert both images to float32 before creating overlay
+        vol_array = sitk.GetArrayFromImage(vol_resampled).astype(np.float32)
+        seg_array = seg_mask.astype(np.float32)
+        overlay_array = vol_array * 0.7 + seg_array * 0.3
+        overlay_image = sitk.GetImageFromArray(overlay_array)
+        overlay_image.CopyInformation(vol_resampled)
+        overlay_save_name = f"{study_uid}_{series_uid}_overlay"
+        save_image(overlay_image, SEGMENTATION_DIR, overlay_save_name, "volume", vol_resampled)
 
-    # Step 4: Locate SeriesInstanceUID folder
-    dicom_series_dir = os.path.join(BATCH_DIR, study_uid, series_uid)
-    if not os.path.exists(dicom_series_dir):
-        print(f"Warning: path {dicom_series_dir} not found. Skipping save.")
+    # Step 3: Crop by organ bounds
+    logging.info("Step 3: Cropping volume")
+    zmin, zmax = get_crop_bounds(seg_mask, INCLUDED_LABELS, z_margin=Z_MARGIN)
+    logging.info(f"Crop bounds - z_min: {zmin}, z_max: {zmax}, crop size: {zmax - zmin}")
+    
+    # Verify crop bounds
+    if zmax <= zmin:
+        logging.error(f"Invalid crop bounds: z_min={zmin}, z_max={zmax}")
         continue
+        
+    # Crop both the segmentation mask and the resampled volume
+    cropped_seg = seg_mask[zmin:zmax]
+    cropped_vol = sitk.GetArrayFromImage(vol_resampled)[zmin:zmax]
+    
+    # Save cropped segmentation
+    cropped_seg_save_name = f"{study_uid}_{series_uid}_cropped_segmentation"
+    save_image(cropped_seg, CROPPED_DIR, cropped_seg_save_name, "segmentation", vol_resampled)
+    
+    # Save cropped volume
+    cropped_vol_save_name = f"{study_uid}_{series_uid}_cropped_volume"
+    save_image(cropped_vol, CROPPED_DIR, cropped_vol_save_name, "volume", vol_resampled)
+    
+    # Create and save cropped overlay
+    cropped_vol_array = cropped_vol.astype(np.float32)
+    cropped_seg_array = cropped_seg.astype(np.float32)
+    cropped_overlay_array = cropped_vol_array * 0.7 + cropped_seg_array * 0.3
+    cropped_overlay_image = sitk.GetImageFromArray(cropped_overlay_array)
+    cropped_overlay_image.CopyInformation(vol_resampled)
+    cropped_overlay_save_name = f"{study_uid}_{series_uid}_cropped_overlay"
+    save_image(cropped_overlay_image, CROPPED_DIR, cropped_overlay_save_name, "volume", vol_resampled)
+    
+    slice_counts.append(zmax - zmin)
 
-    # Step 5: Save slice bounds as JSON
-    save_abdomen_bounds(
-        seg_mask=seg_mask,
-        sitk_img=vol_250,
-        dicom_series_dir=dicom_series_dir,
-        included_labels=included_labels,
-        z_margin=5,
-    )
+# Step 5: Compute average cropped length and resample
+avg_slices = int(np.round(np.mean(slice_counts)))
+logging.info(f"Average cropped length: {avg_slices} slices")
 
-    # Step 6: Load saved bounds and crop image accordingly
-    bounds_path = os.path.join(dicom_series_dir, "abdominal_bounds.json")
-    with open(bounds_path, "r") as f:
-        bounds = json.load(f)
-        zmin = bounds["z_min"]
-        zmax = bounds["z_max"]
+# Optional: Re-resample all saved volumes to avg_slices
+logging.info("Step 5: Final resampling to average length")
+for fname in os.listdir(CROPPED_DIR):
+    img_path = os.path.join(CROPPED_DIR, fname)
+    img = sitk.ReadImage(img_path)
+    original_size = img.GetSize()
+    logging.info(f"Resampling {fname} from size {original_size} to {avg_slices} slices")
+    img_resampled = resample_to_k_slices(img, avg_slices)
+    sitk.WriteImage(img_resampled, img_path)
+    logging.info(f"Final size after resampling: {img_resampled.GetSize()}")
 
-    # Step 7: Crop and save cropped volume
-    cropped_array = sitk.GetArrayFromImage(vol_250)[zmin:zmax, :, :]
-    cropped_image = sitk.GetImageFromArray(cropped_array)
-    cropped_image.SetSpacing(vol_250.GetSpacing())
-    cropped_image.SetOrigin(vol_250.GetOrigin())
-    cropped_image.SetDirection(vol_250.GetDirection())
-
-    # Save in ALIGNED_SLICES_DIR
-    save_name = f"{study_uid}_{series_uid}_abdomen_cropped.nii.gz"
-    save_path = os.path.join(ALIGNED_SLICES_DIR, save_name)
-    sitk.WriteImage(cropped_image, save_path)
+logging.info("Preprocessing completed successfully")

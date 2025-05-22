@@ -1,0 +1,5 @@
+large_files:
+  - path: "models/model.pt"
+    url: "https://developer.download.nvidia.com/assets/Clara/monai/tutorials/model_zoo/model_swin_unetr_btcv_segmentation_v1.pt"
+    hash_val: "50dd67a01b28a1d5487fd9ac27e682fb"
+    hash_type: "md5"

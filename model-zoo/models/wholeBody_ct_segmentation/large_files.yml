@@ -1,0 +1,9 @@
+large_files:
+- path: "models/model.pt"
+  url: "https://developer.download.nvidia.com/assets/Clara/monai/tutorials/model_zoo/model_wholebody_ct_segmentation.pt"
+  hash_val: "aded45dea52f9c00b37922bcd0a98502"
+  hash_type: "md5"
+- path: "models/model_lowres.pt"
+  url: "https://developer.download.nvidia.com/assets/Clara/monai/tutorials/model_zoo/model_lowres_wholebody_ct_segmentation.pt"
+  hash_val: "dbdebeae650f4fb5ea7f4ad01e0d2431"
+  hash_type: "md5"

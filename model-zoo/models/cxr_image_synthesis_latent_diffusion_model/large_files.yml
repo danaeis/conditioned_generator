@@ -1,0 +1,9 @@
+large_files:
+  - path: "models/autoencoder.pt"
+    url: "https://drive.google.com/uc?export=download&id=1paDN1m-Q_Oy8d_BanPkRTi3RlNB_Sv_h"
+    hash_val: "7f579cb789597db7bb5de1488f54bc6c"
+    hash_type: "md5"
+  - path: "models/model.pt"
+    url: "https://drive.google.com/uc?export=download&id=1CjcmiPu5_QWr-f7wDJsXrCCcVeczneGT"
+    hash_val: "c3fd4c8e38cd1d7250a8903cca935823"
+    hash_type: "md5"

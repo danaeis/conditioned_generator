@@ -1,0 +1,110 @@
+{
+    "schema": "https://github.com/Project-MONAI/MONAI-extra-test-data/releases/download/0.8.1/meta_schema_20240725.json",
+    "version": "0.6.3",
+    "changelog": {
+        "0.6.3": "update to huggingface hosting",
+        "0.6.2": "enhance readme for nccl timout issue",
+        "0.6.1": "fix multi-gpu issue",
+        "0.6.0": "use monai 1.4 and update large files",
+        "0.5.9": "update to use monai 1.3.1",
+        "0.5.8": "update readme to add memory warning",
+        "0.5.7": "update channel_def in metadata",
+        "0.5.6": "fix the wrong GPU index issue of multi-node",
+        "0.5.5": "modify mgpu logging level",
+        "0.5.4": "retrain using an internal pretrained ResNet18",
+        "0.5.3": "make the training bundle deterministic",
+        "0.5.2": "update TensorRT descriptions",
+        "0.5.1": "update the TensorRT part in the README file",
+        "0.5.0": "add the command of executing inference with TensorRT models",
+        "0.4.9": "adapt to BundleWorkflow interface",
+        "0.4.8": "update the readme file with TensorRT convert",
+        "0.4.7": "add name tag",
+        "0.4.6": "modify dataset key name",
+        "0.4.5": "update model weights and perfomance metrics",
+        "0.4.4": "restructure readme to match updated template",
+        "0.4.3": "fix wrong figure url",
+        "0.4.2": "update metadata with new metrics",
+        "0.4.1": "Fix inference print logger and froc",
+        "0.4.0": "add lesion FROC calculation and wsi_reader",
+        "0.3.3": "update to use monai 1.0.1",
+        "0.3.2": "enhance readme on commands example",
+        "0.3.1": "fix license Copyright error",
+        "0.3.0": "update license files",
+        "0.2.0": "unify naming",
+        "0.1.1": "fix location variable name change",
+        "0.1.0": "initialize release of the bundle"
+    },
+    "monai_version": "1.4.0",
+    "pytorch_version": "2.4.0",
+    "numpy_version": "1.24.4",
+    "required_packages_version": {
+        "cucim-cu12": "24.6.0",
+        "pandas": "2.2.1",
+        "torchvision": "0.19.0",
+        "pytorch-ignite": "0.4.11",
+        "tensorboard": "2.17.0"
+    },
+    "supported_apps": {},
+    "name": "Pathology tumor detection",
+    "task": "Pathology metastasis detection",
+    "description": "A pre-trained model for metastasis detection on Camelyon 16 dataset.",
+    "authors": "MONAI team",
+    "copyright": "Copyright (c) MONAI Consortium",
+    "data_source": "Camelyon dataset",
+    "data_type": "tiff",
+    "image_classes": "RGB image with intensity between 0 and 255",
+    "label_classes": "binary labels for each patch",
+    "pred_classes": "scalar probability",
+    "eval_metrics": {
+        "accuracy": 0.9,
+        "froc": 0.72
+    },
+    "intended_use": "This is an example, not to be used for diagnostic purposes",
+    "references": [
+        ""
+    ],
+    "network_data_format": {
+        "inputs": {
+            "image": {
+                "type": "image",
+                "format": "magnitude",
+                "num_channels": 3,
+                "spatial_shape": [
+                    224,
+                    224
+                ],
+                "dtype": "float32",
+                "value_range": [
+                    0,
+                    255
+                ],
+                "is_patch_data": true,
+                "channel_def": {
+                    "0": "R",
+                    "1": "G",
+                    "2": "B"
+                }
+            }
+        },
+        "outputs": {
+            "pred": {
+                "type": "probability",
+                "format": "classification",
+                "num_channels": 1,
+                "spatial_shape": [
+                    1,
+                    1
+                ],
+                "dtype": "float32",
+                "is_patch_data": true,
+                "value_range": [
+                    0,
+                    1
+                ],
+                "channel_def": {
+                    "0": "metastasis"
+                }
+            }
+        }
+    }
+}

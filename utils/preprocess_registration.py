@@ -5,7 +5,7 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 import pandas as pd
-from volume_utils import resample_spacing
+from utils.archived_volume_utils import resample_spacing
 from registration_utils import register_to_atlas
 
 # --- CONFIG ---

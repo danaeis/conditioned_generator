@@ -1,0 +1,112 @@
+{
+    "schema": "https://github.com/Project-MONAI/MONAI-extra-test-data/releases/download/0.8.1/meta_schema_20240725.json",
+    "version": "0.5.7",
+    "changelog": {
+        "0.5.7": "update to huggingface hosting",
+        "0.5.6": "use monai 1.4 and update large files",
+        "0.5.5": "update to use monai 1.3.1",
+        "0.5.4": "add load_pretrain flag for infer",
+        "0.5.3": "update to use monai 1.3.0",
+        "0.5.2": "update the checkpoint loader logic for inference",
+        "0.5.1": "add option to validate at training start, and I/O param entries",
+        "0.5.0": "enable finetune and early stop",
+        "0.4.9": "fix orientation issue on clicks",
+        "0.4.8": "Add infer transforms to manage clicks from viewer",
+        "0.4.7": "fix the wrong GPU index issue of multi-node",
+        "0.4.6": "update to use rc7 which solves dynunet issue",
+        "0.4.5": "remove error dollar symbol in readme",
+        "0.4.4": "add RAM comsumption with Cachedataset",
+        "0.4.3": "update ONNX-TensorRT descriptions",
+        "0.4.2": "deterministic retrain benchmark, update fig links",
+        "0.4.1": "add the ONNX-TensorRT way of model conversion",
+        "0.4.0": "fix mgpu finalize issue",
+        "0.3.9": "enable deterministic training",
+        "0.3.8": "adapt to BundleWorkflow interface",
+        "0.3.7": "add name tag",
+        "0.3.6": "restructure readme to match updated template",
+        "0.3.5": "update metric in metadata",
+        "0.3.4": "add validate.json file and dice score in readme",
+        "0.3.3": "update to use monai 1.0.1",
+        "0.3.2": "enhance readme on commands example",
+        "0.3.1": "fix license Copyright error",
+        "0.3.0": "update license files",
+        "0.2.0": "unify naming",
+        "0.1.0": "complete the model package",
+        "0.0.1": "initialize the model package structure"
+    },
+    "monai_version": "1.4.0",
+    "pytorch_version": "2.4.0",
+    "numpy_version": "1.24.4",
+    "required_packages_version": {
+        "itk": "5.4.0",
+        "pytorch-ignite": "0.4.11",
+        "scikit-image": "0.23.2",
+        "einops": "0.7.0",
+        "tensorboard": "2.17.0",
+        "nibabel": "5.2.1"
+    },
+    "supported_apps": {},
+    "name": "Spleen DeepEdit annotation",
+    "task": "Decathlon spleen segmentation",
+    "description": "This is a pre-trained model for 3D segmentation of the spleen organ from CT images using DeepEdit.",
+    "authors": "MONAI team",
+    "copyright": "Copyright (c) MONAI Consortium",
+    "data_source": "Task09_Spleen.tar from http://medicaldecathlon.com/",
+    "data_type": "nibabel",
+    "image_classes": "single channel data, intensity scaled to [0, 1]",
+    "label_classes": "single channel data, 1 is spleen, 0 is background",
+    "pred_classes": "2 channels OneHot data, channel 1 is spleen, channel 0 is background",
+    "eval_metrics": {
+        "mean_dice": 0.97
+    },
+    "intended_use": "This is an example, not to be used for diagnostic purposes",
+    "references": [
+        "Sakinis, Tomas, et al. 'Interactive segmentation of medical images through fully convolutional neural networks.' arXiv preprint arXiv:1903.08205 (2019)"
+    ],
+    "network_data_format": {
+        "inputs": {
+            "image": {
+                "type": "image",
+                "format": "hounsfield",
+                "modality": "CT",
+                "num_channels": 3,
+                "spatial_shape": [
+                    128,
+                    128,
+                    128
+                ],
+                "dtype": "float32",
+                "value_range": [
+                    0,
+                    1
+                ],
+                "is_patch_data": false,
+                "channel_def": {
+                    "0": "image"
+                }
+            }
+        },
+        "outputs": {
+            "pred": {
+                "type": "image",
+                "format": "segmentation",
+                "num_channels": 2,
+                "spatial_shape": [
+                    128,
+                    128,
+                    128
+                ],
+                "dtype": "float32",
+                "value_range": [
+                    0,
+                    1
+                ],
+                "is_patch_data": false,
+                "channel_def": {
+                    "0": "background",
+                    "1": "spleen"
+                }
+            }
+        }
+    }
+}

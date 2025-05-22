@@ -1,0 +1,47 @@
+{
+    "validate#postprocessing": {
+        "_target_": "Compose",
+        "transforms": [
+            {
+                "_target_": "AsDiscreted",
+                "keys": [
+                    "pred",
+                    "label"
+                ],
+                "argmax": [
+                    true,
+                    false
+                ],
+                "to_onehot": 2
+            }
+        ]
+    },
+    "validate#handlers": [
+        {
+            "_target_": "CheckpointLoader",
+            "load_path": "$@ckpt_dir + '/model.pt'",
+            "load_dict": {
+                "model": "@network"
+            }
+        },
+        {
+            "_target_": "StatsHandler",
+            "iteration_log": false
+        },
+        {
+            "_target_": "MetricsSaver",
+            "save_dir": "@output_dir",
+            "metrics": [
+                "val_accu"
+            ],
+            "metric_details": [
+                "val_accu"
+            ],
+            "batch_transform": "$lambda x: [xx['image'].meta for xx in x]",
+            "summary_ops": "*"
+        }
+    ],
+    "run": [
+        "$@validate#evaluator.run()"
+    ]
+}

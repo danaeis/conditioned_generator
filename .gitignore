@@ -5,6 +5,10 @@
 *.onnx
 *.ckpt
 *.pb
+*.nii.gz
+*.nii
+*.npy
+*.whl
 __pycache__/
 *.log
 .DS_Store

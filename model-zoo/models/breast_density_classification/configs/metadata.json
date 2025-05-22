@@ -1,0 +1,84 @@
+{
+    "schema": "https://github.com/Project-MONAI/MONAI-extra-test-data/releases/download/0.8.1/meta_schema_20240725.json",
+    "version": "0.1.7",
+    "changelog": {
+        "0.1.7": "update to huggingface hosting",
+        "0.1.6": "Remove meta dict usage",
+        "0.1.5": "Fixed duplication of input output format section",
+        "0.1.4": "Changed Readme",
+        "0.1.3": "Change input_dim from 229 to 299",
+        "0.1.2": "black autofix format and add name tag",
+        "0.1.1": "update license files",
+        "0.1.0": "complete the model package"
+    },
+    "monai_version": "1.3.0",
+    "pytorch_version": "1.13.1",
+    "numpy_version": "1.22.2",
+    "required_packages_version": {
+        "torchvision": "0.14.1"
+    },
+    "supported_apps": {},
+    "name": "Breast density classification",
+    "task": "Breast Density Classification",
+    "description": "A pre-trained model for classifying breast images (mammograms)  ",
+    "authors": "Center for Augmented Intelligence in Imaging, Mayo Clinic Florida",
+    "copyright": "Copyright (c) Mayo Clinic",
+    "data_source": "Mayo Clinic ",
+    "data_type": "Jpeg",
+    "image_classes": "three channel data, intensity scaled to [0, 1]. A single grayscale is copied to 3 channels",
+    "label_classes": "four classes marked as [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0] and [0, 0, 0, 1] for the classes A, B, C and D respectively.",
+    "pred_classes": "One hot data",
+    "eval_metrics": {
+        "accuracy": 0.96
+    },
+    "intended_use": "This is an example, not to be used for diagnostic purposes",
+    "references": [
+        "Gupta, Vikash, et al. A multi-reconstruction study of breast density estimation using Deep Learning. arXiv preprint arXiv:2202.08238 (2022)."
+    ],
+    "network_data_format": {
+        "inputs": {
+            "image": {
+                "type": "image",
+                "format": "magnitude",
+                "modality": "Mammogram",
+                "num_channels": 3,
+                "spatial_shape": [
+                    299,
+                    299
+                ],
+                "dtype": "float32",
+                "value_range": [
+                    0,
+                    1
+                ],
+                "is_patch_data": false,
+                "channel_def": {
+                    "0": "image"
+                }
+            }
+        },
+        "outputs": {
+            "pred": {
+                "type": "image",
+                "format": "labels",
+                "dtype": "float32",
+                "value_range": [
+                    0,
+                    1
+                ],
+                "num_channels": 4,
+                "spatial_shape": [
+                    1,
+                    4
+                ],
+                "is_patch_data": false,
+                "channel_def": {
+                    "0": "A",
+                    "1": "B",
+                    "2": "C",
+                    "3": "D"
+                }
+            }
+        }
+    }
+}
