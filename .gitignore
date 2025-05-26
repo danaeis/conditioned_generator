@@ -1,6 +1,7 @@
 # Ignore large files
 *.pth
 *.pt
+*.ts
 *.h5
 *.onnx
 *.ckpt
@@ -26,3 +27,4 @@ batch*
 .dcm
 .nrrd
 .nii
+debug/
