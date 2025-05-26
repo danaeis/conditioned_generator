@@ -3,6 +3,18 @@ import logging
 import os
 import SimpleITK as sitk
 
+def crop_abdomen_region(image, lower_hu=-200, upper_hu=300, margin=10):
+    mask = (image > lower_hu) & (image < upper_hu)
+    coords = np.argwhere(mask)
+    if coords.size == 0:
+        raise ValueError("No abdomen region found based on HU range.")
+
+    min_coords = np.maximum(coords.min(axis=0) - margin, 0)
+    max_coords = np.minimum(coords.max(axis=0) + margin + 1, image.shape)
+
+    slices = tuple(slice(min_c, max_c) for min_c, max_c in zip(min_coords, max_coords))
+    return image[slices]
+
 
 def resample_to_k_slices(image, k):
     """
