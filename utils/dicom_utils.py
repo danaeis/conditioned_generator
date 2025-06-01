@@ -7,6 +7,8 @@ import nibabel as nib
 import numpy as np
 from typing import List, Dict, Optional
 from collections import defaultdict
+import json
+
 
 def get_slice_thickness(dicom_path: str) -> float:
     """Get slice thickness from DICOM series (in mm)."""
@@ -64,14 +66,122 @@ def save_dicom_paths(batch_dir: str, labels_csv: str, output_pkl: str) -> List[D
     print(f"Saved {len(final_series_data)} optimal series (1 per phase per study) to {output_pkl}")
     return final_series_data
 
+# def _sitk_to_affine(origin, spacing, direction):
+#     direction_matrix = np.array(direction).reshape(3, 3)
+#     affine = np.eye(4)
+#     affine[:3, :3] = direction_matrix * np.array(spacing).reshape((1, 3))
+#     affine[:3, 3] = origin
+#     return affine
+
+# def convert_dicom_to_nifti(
+#     dicom_path: str,
+#     output_path: str,
+#     reorient: bool = True,
+#     normalize: bool = True,
+#     segmentation_meta: dict = None,
+#     verbose: bool = False
+# ) -> None:
+#     """
+#     Convert a DICOM series to a NIfTI volume in RAS orientation with embedded metadata.
+    
+#     Args:
+#         dicom_path (str): Path to folder containing DICOM slices.
+#         output_path (str): Destination path for the NIfTI file.
+#         reorient (bool): If True, reorient to RAS (BTCV requirement).
+#         normalize (bool): If True, normalize intensities to [0, 1].
+#         segmentation_meta (dict): Dictionary of metadata to embed in NIfTI header.
+#         verbose (bool): If True, print debug information.
+#     """
+#     # Step 1: Collect and sort DICOMs by Z-location
+#     dicom_files = []
+#     for file in os.listdir(dicom_path):
+#         if file.endswith(".dcm"):
+#             filepath = os.path.join(dicom_path, file)
+#             try:
+#                 ds = pydicom.dcmread(filepath, stop_before_pixels=True)
+#                 z = float(ds.ImagePositionPatient[2]) if "ImagePositionPatient" in ds else 0
+#                 dicom_files.append((filepath, z))
+#             except Exception as e:
+#                 if verbose:
+#                     print(f"Skipping unreadable DICOM file {filepath}: {e}")
+
+#     if not dicom_files:
+#         raise ValueError(f"No valid DICOM files found in {dicom_path}")
+
+#     sorted_filepaths = [fp for fp, _ in sorted(dicom_files, key=lambda x: x[1])]
+
+#     # Step 2: Read image with SimpleITK
+#     reader = sitk.ImageSeriesReader()
+#     reader.SetFileNames(sorted_filepaths)
+#     image = reader.Execute()
+
+#     if reorient:
+#         orient_filter = sitk.DICOMOrientImageFilter()
+#         orient_filter.SetDesiredCoordinateOrientation("RAS")
+#         image = orient_filter.Execute(image)
+#         if verbose:
+#             print("Image reoriented to RAS.")
+
+#     # Step 3: Normalize intensity (optional)
+#     # if normalize:
+#     #     array = sitk.GetArrayFromImage(image).astype(np.float32)
+#     #     array = (array - np.min(array)) / (np.max(array) - np.min(array) + 1e-8)
+#     # else:
+#     #     array = sitk.GetArrayFromImage(image).astype(np.float32)
+
+#     # Step 4: Get spatial metadata
+#     spacing = image.GetSpacing()
+#     origin = image.GetOrigin()
+#     direction = image.GetDirection()
+#     affine = _sitk_to_affine(origin, spacing, direction)
+#     array = sitk.GetArrayFromImage(image).astype(np.float32)
+
+#     # Step 5: Create NIfTI image with nibabel and embed metadata
+#     nifti_img = nib.Nifti1Image(array, affine=affine)
+
+#     # Embed metadata as a JSON string in the NIfTI header extension
+#     if segmentation_meta is None:
+#         segmentation_meta = {}
+#     segmentation_meta.update({
+#         "spacing": spacing,
+#         "origin": origin,
+#         "direction": direction,
+#         "orientation": "RAS"
+#     })
+#     ext = nib.nifti1.Nifti1Extension(
+#         40,  # code 40 = JSON
+#         json.dumps(segmentation_meta).encode("utf-8")
+#     )
+#     nifti_img.header.extensions.clear()
+#     nifti_img.header.extensions.append(ext)
+
+#     # Save
+#     nib.save(nifti_img, output_path)
+
+#     if verbose:
+#         print(f"NIfTI saved at {output_path}")
+#         print("Embedded metadata:")
+#         print(json.dumps(segmentation_meta, indent=2))
+
+
+# def _sitk_to_affine(origin, spacing, direction):
+#     """Convert SimpleITK origin, spacing, direction to 4x4 affine."""
+#     direction_matrix = np.array(direction).reshape(3, 3)
+#     spacing_matrix = np.diag(spacing)
+#     rotation_scaling = np.dot(direction_matrix, spacing_matrix)
+#     affine = np.eye(4)
+#     affine[:3, :3] = rotation_scaling
+#     affine[:3, 3] = origin
+#     return affine
+
+
 def convert_dicom_to_nifti(
     dicom_path: str,
     output_path: str,
     reorient: bool = True,
     normalize: bool = True
 ) -> None:
-    """Convert DICOM series to NIfTI format in BTCV-compliant structure."""
-    # Collect and sort DICOM files based on ImagePositionPatient (Z axis)
+    # Step 1: Collect and sort DICOM files
     dicom_files = []
     for file in os.listdir(dicom_path):
         if not file.endswith(".dcm"):
@@ -80,61 +190,48 @@ def convert_dicom_to_nifti(
         ds = pydicom.dcmread(filepath, stop_before_pixels=True)
         ipp = getattr(ds, "ImagePositionPatient", None)
         dicom_files.append((filepath, float(ipp[2]) if ipp else 0))
-
-    # Sort by Z-axis (slice position)
+    
     dicom_files.sort(key=lambda x: x[1])
     sorted_filepaths = [f[0] for f in dicom_files]
 
-    # Read sorted DICOM series
+    # Step 2: Read series
     reader = sitk.ImageSeriesReader()
     reader.SetFileNames(sorted_filepaths)
     image = reader.Execute()
 
-    # Reorient to RAS if specified (BTCV requires RAS orientation)
+    # Step 3: Reorient to RAI (closest to RAS in ITK)
     if reorient:
-        # First, get the current orientation
-        current_orientation = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(image.GetDirection())
-        print(f"Original orientation: {current_orientation}")
+        original_orient = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(image.GetDirection())
+        print(f"Original orientation: {original_orient}")
 
-        # Reorient to RAS
+        # Reorient to RAI
         orient_filter = sitk.DICOMOrientImageFilter()
-        orient_filter.SetDesiredCoordinateOrientation("RAS")
+        orient_filter.SetDesiredCoordinateOrientation("RAI")  # 'RAI' is ITK's equivalent of RAS
         image = orient_filter.Execute(image)
 
-        # Verify the orientation
-        new_orientation = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(image.GetDirection())
-        print(f"New orientation: {new_orientation}")
-        
-        # Verify direction matrix
-        direction = image.GetDirection()
-        print(f"Direction matrix: {direction}")
-        
-        # Expected RAS direction matrix should be (1,0,0,0,1,0,0,0,1)
-        expected_direction = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-        if direction != expected_direction:
-            print("Warning: Direction matrix is not in RAS orientation!")
-            print(f"Expected: {expected_direction}")
-            print(f"Got: {direction}")
+        # Verify the reorientation
+        new_orient = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(image.GetDirection())
+        print(f"New orientation: {new_orient}")
+        print(f"Direction matrix after reorientation: {image.GetDirection()}")
 
-    # Optional intensity normalization
+    # Step 4: Normalize intensities
     if normalize:
         array = sitk.GetArrayFromImage(image).astype(np.float32)
-        array = (array - np.min(array)) / (np.max(array) - np.min(array))
-        image = sitk.GetImageFromArray(array)
-        image.CopyInformation(image)  # preserve spacing/origin/direction
+        # array = (array - np.min(array)) / (np.max(array) - np.min(array) + 1e-5)  # avoid division by 0
+        norm_image = sitk.GetImageFromArray(array)
+        norm_image.CopyInformation(image)  # copy spacing/origin/direction
+        image = norm_image
 
-    # Ensure float32 type for images (BTCV standard)
+    # Step 5: Cast and save
     image = sitk.Cast(image, sitk.sitkFloat32)
-
-    # Save as NIfTI
     sitk.WriteImage(image, output_path)
-    
-    # Verify the saved image
+
+    # Step 6: Verify
     saved_image = sitk.ReadImage(output_path)
-    saved_direction = saved_image.GetDirection()
-    print(f"Saved image direction matrix: {saved_direction}")
-    if saved_direction != expected_direction:
-        print("Warning: Saved image is not in RAS orientation!")
+    print(f"Saved image direction matrix: {saved_image.GetDirection()}")
+    saved_orient = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(saved_image.GetDirection())
+    print(f"Saved image orientation: {saved_orient}")
+
 
 def process_series(
     series_data: List,  # Accepts both tuples and dicts

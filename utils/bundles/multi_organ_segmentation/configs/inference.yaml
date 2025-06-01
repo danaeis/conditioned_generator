@@ -59,8 +59,8 @@ preprocessing:
     mode: bilinear
   - _target_: ScaleIntensityRanged
     keys: image
-    a_min: 0
-    a_max: 1
+    a_min: -500
+    a_max: 500
     b_min: 0
     b_max: 1
     clip: true
