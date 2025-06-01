@@ -35,7 +35,7 @@ logging.info(f"Number of CPU cores: {multiprocessing.cpu_count()}")
 logging.info(f"Python process ID: {os.getpid()}")
 
 # --- CONFIG ---
-CROPPED_VOLUMES_DIR = os.path.join(WORKSPACE_ROOT, 'debug/ncct_cect/vindr_ds/resampled_volumes')
+INPUT_VOLUMES_DIR = os.path.join(WORKSPACE_ROOT, 'debug/ncct_cect/vindr_ds/original_volumes')
 REGISTERED_DIR = os.path.join(WORKSPACE_ROOT, 'debug/ncct_cect/vindr_ds/registered_volumes')
 ATLAS_SAVE_PATH = os.path.join(WORKSPACE_ROOT, 'debug/ncct_cect/vindr_ds/atlas/reference.nii.gz')
 LABELS_CSV = os.path.join(WORKSPACE_ROOT, 'debug/ncct_cect/vindr_ds/labels.csv')
@@ -49,7 +49,7 @@ os.makedirs(os.path.dirname(ATLAS_SAVE_PATH), exist_ok=True)
 
 # Log the paths being used
 logging.info(f"Workspace root: {WORKSPACE_ROOT}")
-logging.info(f"Input volumes directory: {CROPPED_VOLUMES_DIR}")
+logging.info(f"Input volumes directory: {INPUT_VOLUMES_DIR}")
 logging.info(f"Output directory: {REGISTERED_DIR}")
 logging.info(f"Atlas save path: {ATLAS_SAVE_PATH}")
 logging.info(f"Labels CSV: {LABELS_CSV}")
@@ -64,7 +64,7 @@ phase_labels = {
 
 # --- STEP 2: Find Non-Contrast Volumes ---
 print("Finding non-contrast volumes...")
-volume_paths = sorted(list(Path(CROPPED_VOLUMES_DIR).rglob("*.nii.gz")))
+volume_paths = sorted(list(Path(INPUT_VOLUMES_DIR).rglob("*.nii.gz")))
 logging.info(f"Found {len(volume_paths)} total volume files")
 
 non_contrast_paths = []
