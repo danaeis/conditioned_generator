@@ -85,8 +85,9 @@ def create_average_volumes(registered_dir, labels_path, output_dir):
         print(f"Saved average volume to {output_path}")
 
 if __name__ == "__main__":
-    REGISTERED_DIR = "debug/ncct_cect/vindr_ds/registered_volumes"
-    LABELS_PATH = "debug/ncct_cect/vindr_ds/labels.csv"
-    OUTPUT_DIR = "debug/ncct_cect/vindr_ds/average_volumes"
+    PATH = "utils/debug/ncct_cect/vindr_ds"
+    REGISTERED_DIR = os.path.join(PATH, "registered_volumes")
+    LABELS_PATH = os.path.join(PATH, "labels.csv")
+    OUTPUT_DIR = os.path.join(PATH, "average_volumes")
     
     create_average_volumes(REGISTERED_DIR, LABELS_PATH, OUTPUT_DIR)

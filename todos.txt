@@ -1,0 +1,4 @@
+TODO:
+fix model dimentions-> output volume doesnt match the input volume
+check btcv sample meta data
+check the registration method for average volumes messy output

@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 class PhaseConditionalEncoder(nn.Module):
     def __init__(self, in_channels=1, phase_dim=1):
@@ -51,7 +52,18 @@ class PhaseAutoencoder(nn.Module):
         super().__init__()
         self.encoder = PhaseConditionalEncoder(in_channels, phase_dim)
         self.decoder = PhaseConditionalDecoder(phase_dim)
+        self.use_checkpointing = False
+
+    def use_checkpointing(self):
+        """Enable gradient checkpointing for memory efficiency."""
+        self.use_checkpointing = True
 
     def forward(self, x, phase_condition):
-        z = self.encoder(x, phase_condition)
-        return self.decoder(z, phase_condition)
+        if self.use_checkpointing:
+            # Use gradient checkpointing for encoder
+            z = checkpoint(self.encoder, x, phase_condition)
+            # Use gradient checkpointing for decoder
+            return checkpoint(self.decoder, z, phase_condition)
+        else:
+            z = self.encoder(x, phase_condition)
+            return self.decoder(z, phase_condition)
