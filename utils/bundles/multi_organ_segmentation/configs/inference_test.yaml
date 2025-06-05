@@ -7,9 +7,9 @@ output_classes: 8
 arch_ckpt_path: "$@bundle_root + '/models/search_code_18590.pt'"
 arch_ckpt: "$torch.load(@arch_ckpt_path, map_location=torch.device('cuda'),  weights_only=False)"
 bundle_root: "utils/bundles/multi_organ_segmentation"
-output_dir: "utils/debug/ncct_cect/vindr_ds/segmentation_masks"
-dataset_dir: "utils/debug/ncct_cect/vindr_ds/original_volumes/" 
-data_list_file_path: "$@bundle_root + '/configs/dataset_0.json'"
+output_dir: "utils/debug/ncct_cect/vindr_ds/test_segmentation"
+dataset_dir: "utils/debug/ncct_cect/vindr_ds/test_original/" 
+data_list_file_path: "$@bundle_root + '/configs/dataset_1.json'"
 datalist: "$monai.data.load_decathlon_datalist(@data_list_file_path, data_list_key='testing',
   base_dir=@dataset_dir)"
 device: "$torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')"
@@ -110,14 +110,7 @@ postprocessing:
   - _target_: SaveImaged
     keys: pred
     meta_keys: pred_meta_dict
-    output_postfix: "seg"
-    print_log: false
-    separate_folder: false
-    output_ext: ".nii.gz"
-    resample: false
-    mode: "nearest"
-    allow_missing_keys: false
-    output_dir: "$@output_dir"
+    output_dir: "@output_dir"
 
 handlers:
 - _target_: CheckpointLoader

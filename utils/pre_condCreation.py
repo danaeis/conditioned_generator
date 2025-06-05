@@ -7,13 +7,12 @@ from pathlib import Path
 def load_phase_labels(labels_path):
     """Load phase labels from CSV file."""
     df = pd.read_csv(labels_path)
-    # Create a dictionary mapping (study_id, series_id) to phase
+    # Create a dictionary mapping series_id to phase
     phase_map = {}
     for _, row in df.iterrows():
-        study_id = row['StudyInstanceUID']
         series_id = row['SeriesInstanceUID']
         phase = row['Label']
-        phase_map[(study_id, series_id)] = phase
+        phase_map[series_id] = phase
     return phase_map
 
 def create_average_volumes(registered_dir, labels_path, output_dir):
@@ -37,16 +36,11 @@ def create_average_volumes(registered_dir, labels_path, output_dir):
         if not filename.endswith('_registered.nii.gz'):
             continue
             
-        # Extract study_id and series_id from filename
-        parts = filename.replace('_registered.nii.gz', '').split('_')
-        if len(parts) != 2:
-            print(f"Skipping {filename} - invalid format")
-            continue
-            
-        study_id, series_id = parts
+        # Extract series_id from filename
+        series_id = filename.replace('_registered.nii.gz', '')
         
         # Get phase for this volume
-        phase = phase_map.get((study_id, series_id))
+        phase = phase_map.get(series_id)
         if phase is None:
             print(f"Warning: No phase label found for {filename}")
             continue

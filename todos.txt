@@ -1,4 +1,9 @@
 TODO:
-fix model dimentions-> output volume doesnt match the input volume
-check btcv sample meta data
-check the registration method for average volumes messy output
+check the transforms artifacts in the outer body region --> causes missleading information in the average volumes
+delete (zero) the outer body region 
+check the model pipeline ---> dimensions of input/output is not ok
+
+---------------------
+done fix model dimentions-> output volume doesnt match the input volume
+done check btcv sample meta data
+resolved check the registration method for average volumes messy output

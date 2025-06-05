@@ -4,6 +4,10 @@ import logging
 import subprocess
 import yaml
 import sys
+import glob
+import nibabel as nib
+from datetime import datetime
+from pathlib import Path
 
 import torch
 import pickle
@@ -12,6 +16,40 @@ import SimpleITK as sitk
 from tqdm import tqdm
 
 from dicom_utils import process_original_volumes
+
+
+# def get_crop_bounds(seg_mask, included_labels, z_margin=5):
+#     # Create a boolean array where each slice is True if it contains any of the included labels
+#     z_slices = np.any(np.isin(seg_mask, list(included_labels)), axis=-1)
+#     indices = np.where(z_slices)[0]
+#     if len(indices) == 0:
+#         # If no slice contains any of the included labels, keep the whole volume
+#         logging.warning("No slices found containing included labels, keeping whole volume")
+#         return 0, seg_mask.shape[0]
+#     # Determine the topmost and bottommost slice that contains at least one of the included labels
+#     z_min = max(indices[0] - z_margin, 0)
+#     z_max = min(indices[-1] + z_margin + 1, seg_mask.shape[0])  # +1 to include the last slice
+#     logging.info(f"Crop bounds - z_min: {z_min}, z_max: {z_max}, crop size: {z_max - z_min}")
+#     return z_min, z_max
+
+# Configure logging with absolute path
+workspace_root = Path("/media/disk1/saeedeh_danaei/conditioned_generator")
+log_dir = workspace_root / "logs"
+log_dir.mkdir(exist_ok=True)
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+log_file = log_dir / f'pre_segCrop_{timestamp}.log'
+
+# Configure logging format and handlers
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(str(log_file)),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+logging.info(f"Log file created at: {log_file}")
 
 # Set PyTorch memory allocation settings
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
@@ -35,19 +73,21 @@ RESAMPLED_DIR = DEBUG_DIR + 'resampled_volumes'
 SEGMENTATION_DIR = DEBUG_DIR + 'segmentation_masks'
 ORIGINAL_DIR = DEBUG_DIR + 'original_volumes'
 
+
 STANDARD_SPACING = (1.0, 1.0, 1.0)
 TARGET_SLICE_NUM = 128
 
 # Labels to keep for cropping
-INCLUDED_LABELS = {1, 2, 3, 5, 6, 7}
+INCLUDED_LABELS = {3. , 4. , 5. , 6. , 7. }
 Z_MARGIN = 5
 
-process_original_volumes(
+# Step 1: Process original volumes
+original_volume_paths = process_original_volumes(
         batch_dir=BATCH_DIR,
         labels_csv=LABELS_CSV,
         nifti_root_dir=ORIGINAL_DIR,
         pkl_path=CACHE_PATH,
-        overwrite_nifti=True  # Set to True to force reprocessing
+        overwrite_nifti=False  # Set to True to force reprocessing
     )
 
 MONAI_DATA_DIR = ORIGINAL_DIR
@@ -61,6 +101,12 @@ for study_uid in os.listdir(MONAI_DATA_DIR):
         if series_file.endswith(".nii.gz"):
             full_path = os.path.join(study_path, series_file)
             nifti_paths.append(full_path.split("/")[-2]+"/"+full_path.split("/")[-1])
+
+# Create a mapping of series_id to original volume path for quick lookup
+series_to_original_path = {}
+for path in nifti_paths:
+    series_id = path.split("/")[-1].replace(".nii.gz", "")
+    series_to_original_path[series_id] = os.path.join(ORIGINAL_DIR, path)
 
 # Create JSON entries with relative paths or full paths
 dataset_config = {
@@ -114,3 +160,66 @@ except FileNotFoundError:
 except Exception as e:
     logging.error(f"An unexpected error occurred during segmentation inference: {e}")
     raise
+
+# Step 4: Run cropping
+logging.info("Step 4: Running cropping")
+logging.info(f"Running cropping on device: {device}")
+
+# Get all segmentation files
+seg_files = glob.glob(os.path.join(SEGMENTATION_DIR, "*_seg.nii.gz"))
+logging.info(f"Found {len(seg_files)} segmentation files")
+
+for seg_file in seg_files:
+    try:
+        # Get the original series ID from the segmentation filename
+        series_id = os.path.basename(seg_file).replace("_seg.nii.gz", "")
+        print(series_id)
+        
+        # Load segmentation mask
+        seg_img = nib.load(seg_file)
+        seg_data = seg_img.get_fdata()
+        print("unique data in seg data",np.unique(seg_data))
+        print("shape", seg_data.shape)
+        
+        # Find the highest slice that contains any of our included labels
+        max_slice = 0
+        print("INCLUDED_LABELS:", INCLUDED_LABELS)
+        print("Unique values in seg_data:", np.unique(seg_data))
+
+        start_slice = None
+        for z in range(seg_data.shape[2]):  # assuming z-axis is the third dimension
+            slice_data = seg_data[:, :, z]
+            if np.any(np.isin(slice_data, list(INCLUDED_LABELS))):
+                start_slice = z
+                break
+
+        if start_slice is not None:
+            print(f"First slice with target labels: {start_slice}")
+            # Crop the volume
+            cropped_seg_data = seg_data[:, :, start_slice:]
+        else:
+            print("No target labels found in the volume.")
+        
+        # Use the pre-computed mapping to get the original volume path
+        if series_id in series_to_original_path:
+            orig_file = series_to_original_path[series_id]
+            if os.path.exists(orig_file):
+                orig_img = nib.load(orig_file)
+                orig_data = orig_img.get_fdata()
+                cropped_orig = orig_data[:, :, :start_slice]
+                cropped_orig_img = nib.Nifti1Image(cropped_orig, orig_img.affine, orig_img.header)
+                output_orig_path = os.path.join(CROPPED_DIR, f"{series_id}.nii.gz")
+                nib.save(cropped_orig_img, output_orig_path)
+                logging.info(f"Found and cropped original volume for {series_id}")
+            else:
+                logging.warning(f"Original volume file not found for {series_id}")
+        else:
+            logging.warning(f"Could not find original volume path for {series_id}")
+            
+        logging.info(f"Successfully processed {series_id}")
+        
+    except Exception as e:
+        logging.error(f"Error processing {seg_file}: {str(e)}")
+        continue
+
+logging.info("Cropping completed")

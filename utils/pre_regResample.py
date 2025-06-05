@@ -7,29 +7,25 @@ from registration_utils import compute_quick_metric, register_to_atlas
 def load_phase_labels(labels_path):
     """Load phase labels from CSV file."""
     df = pd.read_csv(labels_path)
-    # Create a dictionary mapping (study_id, series_id) to phase
+    # Create a dictionary mapping series_id to phase
     phase_map = {}
     for _, row in df.iterrows():
-        study_id = row['StudyInstanceUID']
         series_id = row['SeriesInstanceUID']
         phase = row['Label']
-        phase_map[(study_id, series_id)] = phase.lower()
+        phase_map[series_id] = phase.lower()
     return phase_map
 
 def load_images_from_directory(input_dir):
     """
-    Load all NIfTI volumes from the nested input directory: study_id/series_id.nii
+    Load all NIfTI volumes from the input directory where files are named by series_id.nii
     """
     volume_paths = {}
-    for study_id in os.listdir(input_dir):
-        study_path = os.path.join(input_dir, study_id)
-        if not os.path.isdir(study_path):
-            continue
-        for file in os.listdir(study_path):
-            if file.endswith(".nii") or file.endswith(".nii.gz"):
-                full_path = os.path.join(study_path, file)
-                series_id = os.path.splitext(file)[0].replace(".nii", "").replace(".gz", "")
-                volume_paths[(study_id, series_id)] = full_path
+    for file in os.listdir(input_dir):
+        if file.endswith(".nii") or file.endswith(".nii.gz"):
+            full_path = os.path.join(input_dir, file)
+            series_id = os.path.splitext(file)[0].replace(".nii", "").replace(".gz", "")
+            volume_paths[series_id] = full_path
+    
     return volume_paths
 
 def select_atlas(volumes, phase_map):
@@ -97,7 +93,7 @@ def main(input_dir, output_dir, labels_path):
     for key, path in volume_paths.items():
         if key == atlas_key:
             # Copy atlas itself to output unchanged
-            out_path = os.path.join(output_dir, f"{key[0]}_{key[1]}_registered.nii.gz")
+            out_path = os.path.join(output_dir, f"{key}_registered.nii.gz")
             sitk.WriteImage(atlas_img, out_path)
             logging.info(f"Copied atlas to {out_path}")
             continue
@@ -109,7 +105,7 @@ def main(input_dir, output_dir, labels_path):
             logging.info(f"Registering {key} to atlas {atlas_key}...")
             transform, registered_img = register_to_atlas(atlas_img, moving_img)
             
-            out_path = os.path.join(output_dir, f"{key[0]}_{key[1]}_registered.nii.gz")
+            out_path = os.path.join(output_dir, f"{key}_registered.nii.gz")
             sitk.WriteImage(registered_img, out_path)
             logging.info(f"Saved registered image to {out_path}")
             
@@ -130,7 +126,7 @@ if __name__ == "__main__":
 
     # args = parser.parse_args()
     # main(args.input_dir, args.output_dir, args.labels_path)
-    INPUT_DIR = "utils/debug/ncct_cect/vindr_ds/original_volumes"
+    INPUT_DIR = "utils/debug/ncct_cect/vindr_ds/cropped_volumes"
     OUTPUT_DIR = "utils/debug/ncct_cect/vindr_ds/registered_volumes"
     LABELS_PATH = "utils/debug/ncct_cect/vindr_ds/labels.csv"
     main(INPUT_DIR, OUTPUT_DIR, LABELS_PATH)

@@ -8,6 +8,7 @@ import numpy as np
 from typing import List, Dict, Optional
 from collections import defaultdict
 import json
+import subprocess
 
 
 def get_slice_thickness(dicom_path: str) -> float:
@@ -66,182 +67,87 @@ def save_dicom_paths(batch_dir: str, labels_csv: str, output_pkl: str) -> List[D
     print(f"Saved {len(final_series_data)} optimal series (1 per phase per study) to {output_pkl}")
     return final_series_data
 
-# def _sitk_to_affine(origin, spacing, direction):
-#     direction_matrix = np.array(direction).reshape(3, 3)
-#     affine = np.eye(4)
-#     affine[:3, :3] = direction_matrix * np.array(spacing).reshape((1, 3))
-#     affine[:3, 3] = origin
-#     return affine
-
-# def convert_dicom_to_nifti(
-#     dicom_path: str,
-#     output_path: str,
-#     reorient: bool = True,
-#     normalize: bool = True,
-#     segmentation_meta: dict = None,
-#     verbose: bool = False
-# ) -> None:
-#     """
-#     Convert a DICOM series to a NIfTI volume in RAS orientation with embedded metadata.
-    
-#     Args:
-#         dicom_path (str): Path to folder containing DICOM slices.
-#         output_path (str): Destination path for the NIfTI file.
-#         reorient (bool): If True, reorient to RAS (BTCV requirement).
-#         normalize (bool): If True, normalize intensities to [0, 1].
-#         segmentation_meta (dict): Dictionary of metadata to embed in NIfTI header.
-#         verbose (bool): If True, print debug information.
-#     """
-#     # Step 1: Collect and sort DICOMs by Z-location
-#     dicom_files = []
-#     for file in os.listdir(dicom_path):
-#         if file.endswith(".dcm"):
-#             filepath = os.path.join(dicom_path, file)
-#             try:
-#                 ds = pydicom.dcmread(filepath, stop_before_pixels=True)
-#                 z = float(ds.ImagePositionPatient[2]) if "ImagePositionPatient" in ds else 0
-#                 dicom_files.append((filepath, z))
-#             except Exception as e:
-#                 if verbose:
-#                     print(f"Skipping unreadable DICOM file {filepath}: {e}")
-
-#     if not dicom_files:
-#         raise ValueError(f"No valid DICOM files found in {dicom_path}")
-
-#     sorted_filepaths = [fp for fp, _ in sorted(dicom_files, key=lambda x: x[1])]
-
-#     # Step 2: Read image with SimpleITK
-#     reader = sitk.ImageSeriesReader()
-#     reader.SetFileNames(sorted_filepaths)
-#     image = reader.Execute()
-
-#     if reorient:
-#         orient_filter = sitk.DICOMOrientImageFilter()
-#         orient_filter.SetDesiredCoordinateOrientation("RAS")
-#         image = orient_filter.Execute(image)
-#         if verbose:
-#             print("Image reoriented to RAS.")
-
-#     # Step 3: Normalize intensity (optional)
-#     # if normalize:
-#     #     array = sitk.GetArrayFromImage(image).astype(np.float32)
-#     #     array = (array - np.min(array)) / (np.max(array) - np.min(array) + 1e-8)
-#     # else:
-#     #     array = sitk.GetArrayFromImage(image).astype(np.float32)
-
-#     # Step 4: Get spatial metadata
-#     spacing = image.GetSpacing()
-#     origin = image.GetOrigin()
-#     direction = image.GetDirection()
-#     affine = _sitk_to_affine(origin, spacing, direction)
-#     array = sitk.GetArrayFromImage(image).astype(np.float32)
-
-#     # Step 5: Create NIfTI image with nibabel and embed metadata
-#     nifti_img = nib.Nifti1Image(array, affine=affine)
-
-#     # Embed metadata as a JSON string in the NIfTI header extension
-#     if segmentation_meta is None:
-#         segmentation_meta = {}
-#     segmentation_meta.update({
-#         "spacing": spacing,
-#         "origin": origin,
-#         "direction": direction,
-#         "orientation": "RAS"
-#     })
-#     ext = nib.nifti1.Nifti1Extension(
-#         40,  # code 40 = JSON
-#         json.dumps(segmentation_meta).encode("utf-8")
-#     )
-#     nifti_img.header.extensions.clear()
-#     nifti_img.header.extensions.append(ext)
-
-#     # Save
-#     nib.save(nifti_img, output_path)
-
-#     if verbose:
-#         print(f"NIfTI saved at {output_path}")
-#         print("Embedded metadata:")
-#         print(json.dumps(segmentation_meta, indent=2))
 
 
-# def _sitk_to_affine(origin, spacing, direction):
-#     """Convert SimpleITK origin, spacing, direction to 4x4 affine."""
-#     direction_matrix = np.array(direction).reshape(3, 3)
-#     spacing_matrix = np.diag(spacing)
-#     rotation_scaling = np.dot(direction_matrix, spacing_matrix)
-#     affine = np.eye(4)
-#     affine[:3, :3] = rotation_scaling
-#     affine[:3, 3] = origin
-#     return affine
-
-
-def convert_dicom_to_nifti(
+def convert_dicom_to_nifti_dcm2niix(
     dicom_path: str,
     output_path: str,
-    reorient: bool = True,
-    normalize: bool = True
+    overwrite: bool = False
 ) -> None:
-    # Step 1: Collect and sort DICOM files
-    dicom_files = []
-    for file in os.listdir(dicom_path):
-        if not file.endswith(".dcm"):
-            continue
-        filepath = os.path.join(dicom_path, file)
-        ds = pydicom.dcmread(filepath, stop_before_pixels=True)
-        ipp = getattr(ds, "ImagePositionPatient", None)
-        dicom_files.append((filepath, float(ipp[2]) if ipp else 0))
+    """
+    Convert DICOM series to NIfTI using dcm2niix.
     
-    dicom_files.sort(key=lambda x: x[1])
-    sorted_filepaths = [f[0] for f in dicom_files]
-
-    # Step 2: Read series
-    reader = sitk.ImageSeriesReader()
-    reader.SetFileNames(sorted_filepaths)
-    image = reader.Execute()
-
-    # Step 3: Reorient to RAI (closest to RAS in ITK)
-    if reorient:
-        original_orient = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(image.GetDirection())
-        print(f"Original orientation: {original_orient}")
-
-        # Reorient to RAI
-        orient_filter = sitk.DICOMOrientImageFilter()
-        orient_filter.SetDesiredCoordinateOrientation("RAI")  # 'RAI' is ITK's equivalent of RAS
-        image = orient_filter.Execute(image)
-
-        # Verify the reorientation
-        new_orient = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(image.GetDirection())
-        print(f"New orientation: {new_orient}")
-        print(f"Direction matrix after reorientation: {image.GetDirection()}")
-
-    # Step 4: Normalize intensities
-    if normalize:
-        array = sitk.GetArrayFromImage(image).astype(np.float32)
-        # array = (array - np.min(array)) / (np.max(array) - np.min(array) + 1e-5)  # avoid division by 0
-        norm_image = sitk.GetImageFromArray(array)
-        norm_image.CopyInformation(image)  # copy spacing/origin/direction
-        image = norm_image
-
-    # Step 5: Cast and save
-    image = sitk.Cast(image, sitk.sitkFloat32)
-    sitk.WriteImage(image, output_path)
-
-    # Step 6: Verify
-    saved_image = sitk.ReadImage(output_path)
-    print(f"Saved image direction matrix: {saved_image.GetDirection()}")
-    saved_orient = sitk.DICOMOrientImageFilter.GetOrientationFromDirectionCosines(saved_image.GetDirection())
-    print(f"Saved image orientation: {saved_orient}")
-
+    Args:
+        dicom_path (str): Path to the DICOM directory
+        output_path (str): Path where the NIfTI file should be saved
+        overwrite (bool): Whether to overwrite existing files
+    """
+    try:
+        # Create output directory if it doesn't exist
+        output_dir = os.path.dirname(output_path)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Get base filename without any extensions
+        base_filename = os.path.splitext(os.path.splitext(os.path.basename(output_path))[0])[0]
+        
+        # Prepare dcm2niix command - simplified for compatibility
+        cmd = [
+            "dcm2niix",
+            "-z", "y",
+            "-o", output_dir,  # output directory
+            "-f", base_filename,  # output filename without extension
+            dicom_path  # input DICOM folder
+        ]
+        
+        # Debug: Print the full command
+        print(f"Executing command: {' '.join(cmd)}")
+        
+        # Debug: Check if input directory exists and has DICOM files
+        if not os.path.exists(dicom_path):
+            raise Exception(f"Input directory does not exist: {dicom_path}")
+        
+        dicom_files = [f for f in os.listdir(dicom_path) if f.endswith('.dcm')]
+        if not dicom_files:
+            raise Exception(f"No DICOM files found in {dicom_path}")
+        print(f"Found {len(dicom_files)} DICOM files in input directory")
+        
+        # Run dcm2niix
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Debug: Print command output
+        print(f"Command stdout: {result.stdout}")
+        print(f"Command stderr: {result.stderr}")
+        
+        if result.returncode != 0:
+            raise Exception(f"dcm2niix failed: {result.stderr}")
+        
+        # Debug: Check if output file was created
+        expected_output = os.path.join(output_dir, f"{base_filename}.nii.gz")
+        if not os.path.exists(expected_output):
+            raise Exception(f"Expected output file not created: {expected_output}")
+            
+        print(f"✓ Successfully converted {dicom_path} to {output_path}")
+        
+    except Exception as e:
+        print(f"✗ Failed to convert {dicom_path}: {str(e)}")
+        raise
 
 def process_series(
     series_data: List,  # Accepts both tuples and dicts
     nifti_root_dir: str,
-    overwrite: bool = False
+    overwrite: bool = False,
+    use_dcm2niix: bool = True  # New parameter to choose conversion method
 ) -> None:
     """
     Process DICOM series in either tuple or dictionary format.
     Tuple format: (study_uid, series_uid, sitk_image, metadata)
     Dict format: {'study_uid': ..., 'series_uid': ..., ...}
+    
+    Args:
+        series_data (List): List of series data in either tuple or dict format
+        nifti_root_dir (str): Root directory for NIfTI output
+        overwrite (bool): Whether to overwrite existing files
+        use_dcm2niix (bool): Whether to use dcm2niix for conversion (True) or SimpleITK (False)
     """
     for series in series_data:
         try:
@@ -263,12 +169,13 @@ def process_series(
             # Define output path
             output_path = os.path.join(output_dir, f"{series_uid}.nii.gz")
             
-            # Skip if exists
+            # Skip if exists and not overwriting
             if not overwrite and os.path.exists(output_path):
+                print(f"✓ Skipping {output_path} (already exists)")
                 continue
 
             if dicom_path:
-                convert_dicom_to_nifti(dicom_path, output_path)
+                convert_dicom_to_nifti_dcm2niix(dicom_path, output_path, overwrite)
                 print(f"✓ Saved {output_path}")
             else:
                 print(f"✗ Skipping {series_uid}: no DICOM path provided.")

@@ -13,104 +13,104 @@ import SimpleITK as sitk
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 torch.cuda.empty_cache()
 
-def load_dicom_series(dicom_dir):
-    """Load a series of DICOM files and return as a 3D numpy array."""
-    dicom_files = list(Path(dicom_dir).glob('*.dcm'))
-    if not dicom_files:
-        raise ValueError(f"No DICOM files found in {dicom_dir}")
+# def load_dicom_series(dicom_dir):
+#     """Load a series of DICOM files and return as a 3D numpy array."""
+#     dicom_files = list(Path(dicom_dir).glob('*.dcm'))
+#     if not dicom_files:
+#         raise ValueError(f"No DICOM files found in {dicom_dir}")
     
-    # Load all DICOMs to get positions and sort
-    dicom_data = []
-    for dcm_file in dicom_files:
-        ds = pydicom.dcmread(str(dcm_file))
-        z_pos = float(ds.ImagePositionPatient[2])
-        dicom_data.append((ds, z_pos))
+#     # Load all DICOMs to get positions and sort
+#     dicom_data = []
+#     for dcm_file in dicom_files:
+#         ds = pydicom.dcmread(str(dcm_file))
+#         z_pos = float(ds.ImagePositionPatient[2])
+#         dicom_data.append((ds, z_pos))
     
-    # Sort by Z position (ImagePositionPatient[2])
-    dicom_data.sort(key=lambda x: x[1])
+#     # Sort by Z position (ImagePositionPatient[2])
+#     dicom_data.sort(key=lambda x: x[1])
     
-    # Get dimensions from first slice
-    first_slice = dicom_data[0][0]
-    rows = first_slice.Rows
-    cols = first_slice.Columns
-    num_slices = len(dicom_data)
+#     # Get dimensions from first slice
+#     first_slice = dicom_data[0][0]
+#     rows = first_slice.Rows
+#     cols = first_slice.Columns
+#     num_slices = len(dicom_data)
     
-    # Initialize 3D array
-    volume = np.zeros((num_slices, rows, cols), dtype=np.float32)
+#     # Initialize 3D array
+#     volume = np.zeros((num_slices, rows, cols), dtype=np.float32)
     
-    # Load all slices in sorted order
-    for i, (ds, _) in enumerate(dicom_data):
-        volume[i] = ds.pixel_array.astype(np.float32)
+#     # Load all slices in sorted order
+#     for i, (ds, _) in enumerate(dicom_data):
+#         volume[i] = ds.pixel_array.astype(np.float32)
     
-    # Apply rescale slope and intercept if available
-    if hasattr(first_slice, 'RescaleSlope'):
-        volume = volume * first_slice.RescaleSlope
-    if hasattr(first_slice, 'RescaleIntercept'):
-        volume = volume + first_slice.RescaleIntercept
+#     # Apply rescale slope and intercept if available
+#     if hasattr(first_slice, 'RescaleSlope'):
+#         volume = volume * first_slice.RescaleSlope
+#     if hasattr(first_slice, 'RescaleIntercept'):
+#         volume = volume + first_slice.RescaleIntercept
     
-    return volume, first_slice
+#     return volume, first_slice
 
 # Load a single test volume from DICOM
 
-test_volume_path = "../ncct_cect/vindr_ds/batches/test_batch/1.2.840.113619.2.278.3.717616.306.1582703645.511/1.2.840.113619.2.278.3.717616.306.1582703645.622.4202498/"
-print(f"Loading test volume from DICOM directory: {test_volume_path}")
+# test_volume_path = "../ncct_cect/vindr_ds/batches/test_batch/1.2.840.113619.2.278.3.717616.306.1582703645.511/1.2.840.113619.2.278.3.717616.306.1582703645.622.4202498/"
+# print(f"Loading test volume from DICOM directory: {test_volume_path}")
 
-# Load and inspect original DICOM data
-original_data, first_slice = load_dicom_series(test_volume_path)
-print("\nOriginal DICOM image statistics:")
-print(f"Shape: {original_data.shape}")
-print(f"Value range: [{original_data.min():.3f}, {original_data.max():.3f}]")
-print(f"Mean: {original_data.mean():.3f}")
-print(f"Std: {original_data.std():.3f}")
-print(f"Unique values: {np.unique(original_data)}")
+# # Load and inspect original DICOM data
+# original_data, first_slice = load_dicom_series(test_volume_path)
+# print("\nOriginal DICOM image statistics:")
+# print(f"Shape: {original_data.shape}")
+# print(f"Value range: [{original_data.min():.3f}, {original_data.max():.3f}]")
+# print(f"Mean: {original_data.mean():.3f}")
+# print(f"Std: {original_data.std():.3f}")
+# print(f"Unique values: {np.unique(original_data)}")
 
-# Create a temporary NIfTI file for MONAI processing
+# # Create a temporary NIfTI file for MONAI processing
 output_dir = "utils/debug/ncct_cect/vindr_ds/test_segmentation"
 os.makedirs(output_dir, exist_ok=True)
 
-# Extract study and series UIDs from the path
-study_uid = test_volume_path.split('/')[-2]
-series_uid = test_volume_path.split('/')[-1]
-temp_nifti_path = os.path.join(output_dir, f"{study_uid}_{series_uid}.nii.gz")
+# # Extract study and series UIDs from the path
+# study_uid = test_volume_path.split('/')[-2]
+# series_uid = test_volume_path.split('/')[-1]
+# temp_nifti_path = os.path.join(output_dir, f"{study_uid}_{series_uid}.nii.gz")
 
-# Get spacing and origin from DICOM
-spacing = (
-    float(first_slice.PixelSpacing[0]),
-    float(first_slice.PixelSpacing[1]),
-    float(first_slice.SliceThickness)
-)
-origin = (
-    float(first_slice.ImagePositionPatient[0]),
-    float(first_slice.ImagePositionPatient[1]),
-    float(first_slice.ImagePositionPatient[2])
-)
+# # Get spacing and origin from DICOM
+# spacing = (
+#     float(first_slice.PixelSpacing[0]),
+#     float(first_slice.PixelSpacing[1]),
+#     float(first_slice.SliceThickness)
+# )
+# origin = (
+#     float(first_slice.ImagePositionPatient[0]),
+#     float(first_slice.ImagePositionPatient[1]),
+#     float(first_slice.ImagePositionPatient[2])
+# )
 
-# Convert to SimpleITK image with proper metadata
-sitk_image = sitk.GetImageFromArray(original_data)
-sitk_image.SetSpacing(spacing)
-sitk_image.SetOrigin(origin)
+# # Convert to SimpleITK image with proper metadata
+# sitk_image = sitk.GetImageFromArray(original_data)
+# sitk_image.SetSpacing(spacing)
+# sitk_image.SetOrigin(origin)
 
-# Reorient to RAI (ITK's equivalent of RAS)
-orient_filter = sitk.DICOMOrientImageFilter()
-orient_filter.SetDesiredCoordinateOrientation("RAI")
-sitk_image = orient_filter.Execute(sitk_image)
+# # Reorient to RAI (ITK's equivalent of RAS)
+# orient_filter = sitk.DICOMOrientImageFilter()
+# orient_filter.SetDesiredCoordinateOrientation("RAI")
+# sitk_image = orient_filter.Execute(sitk_image)
 
-# Save as NIfTI
-sitk.WriteImage(sitk_image, temp_nifti_path)
+# # Save as NIfTI
+# sitk.WriteImage(sitk_image, temp_nifti_path)
+# image = sitk.ReadImage(temp_nifti_path)
 
 # Load and preprocess the volume
+# Original image spacing: (0.70703125, 0.70703125, 5.0)
 preprocessing = Compose([
     LoadImaged(keys="image"),
     EnsureChannelFirstd(keys="image"),
     Orientationd(keys="image", axcodes="RAS"),  # Keep RAS for consistency
-    Spacingd(keys="image", pixdim=[1, 1, 1], mode="bilinear"),
     ScaleIntensityRanged(keys="image", a_min=-500, a_max=500, b_min=0, b_max=1, clip=True),  # Adjusted for CT HU range
     EnsureTyped(keys="image")
 ])
-
-# temp_nifti_path = "/media/disk1/saeedeh_danaei/conditioned_generator/utils/debug/ncct_cect/vindr_ds/original_volumes/1.2.840.113619.2.278.3.717616.306.1582703645.511/1.2.840.113619.2.278.3.717616.306.1582703645.622.4202498.nii.gz"
-# Process the volume
+temp_nifti_path = "./img0023.nii.gz"
 data_dict = {"image": temp_nifti_path}
+
 processed = preprocessing(data_dict)
 input_tensor = processed["image"].unsqueeze(0)  # Add batch dimension
 print(f"\nPreprocessed input tensor shape: {input_tensor.shape}")
@@ -226,6 +226,3 @@ header.set_sform(affine)
 pred_img = nib.Nifti1Image(pred_np[0], affine, header)
 nib.save(pred_img, output_path)
 print(f"Saved prediction to: {output_path}")
-
-# Clean up temporary file
-os.remove(temp_nifti_path) 
