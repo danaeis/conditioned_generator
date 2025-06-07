@@ -32,6 +32,7 @@ class PhaseConditionalEncoder(nn.Module):
         return x.numel() // x.size(0)
 
     def forward(self, x, phase_condition):
+        print(f"[Encoder] Input x shape: {x.shape}, phase_condition shape: {phase_condition.shape}")
         B, C, D, H, W = x.shape
         
         if self.fc is None:
@@ -40,13 +41,21 @@ class PhaseConditionalEncoder(nn.Module):
             # Reduced latent space dimension
             self.fc = nn.Linear(fc_input_size, 128).to(x.device)
         
+        # Concatenate input with phase condition
         x = torch.cat([x, phase_condition], dim=1)
         
-        for conv in self.conv_layers:
+        print(f"[Encoder] After concat: {x.shape}")
+        # Process through conv layers
+        for i, conv in enumerate(self.conv_layers):
             x = F.leaky_relu(conv(x), 0.2)
+            print(f"[Encoder] After conv {i}: {x.shape}")
         
+        # Flatten and pass through FC
         x = x.view(B, -1)
-        return self.fc(x)
+        print(f"[Encoder] After flatten: {x.shape}")
+        out = self.fc(x)
+        print(f"[Encoder] Output: {out.shape}")
+        return out
 
 class PhaseConditionalDecoder(nn.Module):
     def __init__(self, phase_dim=1):
@@ -54,7 +63,8 @@ class PhaseConditionalDecoder(nn.Module):
         self.phase_dim = phase_dim
         self.deconv_layers = None
         self.fc = None
-        self.input_shape = None
+        self.phase_fc = None
+        self.encoder = None
 
     def _create_deconv_layers(self, final_shape):
         # Reduced number of channels
@@ -75,39 +85,49 @@ class PhaseConditionalDecoder(nn.Module):
         return nn.ModuleList(layers)
 
     def forward(self, z, phase_condition):
+        print(f"[Decoder] Input z shape: {z.shape}, phase_condition shape: {phase_condition.shape}")
         B = z.size(0)
         
         if self.deconv_layers is None:
             final_shape = self.encoder.final_shape
             self.deconv_layers = self._create_deconv_layers(final_shape).to(z.device)
             
-            fc_output_size = 128 * final_shape[0] * final_shape[1] * final_shape[2]
+            fc_output_size = final_shape[0] * final_shape[1] * final_shape[2] * final_shape[3]
             self.fc = nn.Linear(128, fc_output_size).to(z.device)
             self.phase_fc = nn.Linear(self.phase_dim, 128).to(z.device)
         
-        # Extract phase value from the 5D tensor (B, 1, D, H, W) -> (B, 1)
+        # Process latent vector
+        x = F.relu(self.fc(z))
+        x = x.view(B, *self.encoder.final_shape)
+        
+        print(f"[Decoder] After FC and reshape: {x.shape}")
+        # Process phase condition
         phase_flat = phase_condition[:, :, 0, 0, 0]
         phase_features = self.phase_fc(phase_flat)
-        
-        x = F.relu(self.fc(z))
-        x = x.view(-1, 128, *self.encoder.final_shape[1:])
-        
-        # Expand phase features to match the current spatial dimensions of x
         phase_features = phase_features.view(B, 128, 1, 1, 1)
-        phase_features = phase_features.expand_as(x)
+        phase_features = phase_features.expand(B, 128, *x.shape[2:])
+        
+        # Combine features
         x = x + phase_features
         
+        print(f"[Decoder] After adding phase features: {x.shape}")
+        # Process through deconv layers
         for i, deconv in enumerate(self.deconv_layers[:-1]):
             x = F.leaky_relu(deconv(x), 0.2)
+            print(f"[Decoder] After deconv {i}: {x.shape}")
         
-        # Final layer with sigmoid activation
+        # Final layer
         x = self.deconv_layers[-1](x)
         
+        print(f"[Decoder] After final deconv: {x.shape}")
         # Ensure output matches input dimensions
         if x.shape[2:] != phase_condition.shape[2:]:
             x = F.interpolate(x, size=phase_condition.shape[2:], mode='trilinear', align_corners=False)
+            print(f"[Decoder] After interpolate: {x.shape}")
         
-        return torch.sigmoid(x)
+        out = torch.sigmoid(x)
+        print(f"[Decoder] Output: {out.shape}")
+        return out
 
 class PhaseAutoencoder(nn.Module):
     def __init__(self, in_channels=1, phase_dim=1):
@@ -121,6 +141,16 @@ class PhaseAutoencoder(nn.Module):
         """Enable gradient checkpointing for memory efficiency."""
         self.use_checkpoint = True
 
+    def _encoder_forward(self, x, phase_condition):
+        """Separate function for encoder forward pass to ensure consistent tensor creation."""
+        print(f"[Autoencoder] Calling encoder_forward")
+        return self.encoder(x, phase_condition)
+
+    def _decoder_forward(self, z, phase_condition):
+        """Separate function for decoder forward pass to ensure consistent tensor creation."""
+        print(f"[Autoencoder] Calling decoder_forward")
+        return self.decoder(z, phase_condition)
+
     def forward(self, x, input_phase_condition, output_phase_condition):
         """
         Args:
@@ -128,29 +158,34 @@ class PhaseAutoencoder(nn.Module):
             input_phase_condition: Phase condition for input (B, 1, D, H, W)
             output_phase_condition: Phase condition for output (B, 1, D, H, W)
         """
-        # Ensure inputs require gradients
-        if not x.requires_grad:
-            x.requires_grad_(True)
-        if not input_phase_condition.requires_grad:
-            input_phase_condition.requires_grad_(True)
-        if not output_phase_condition.requires_grad:
-            output_phase_condition.requires_grad_(True)
-
-        if self.use_checkpoint:
-            # Use gradient checkpointing for encoder with explicit use_reentrant=False
-            z = checkpoint(
-                self.encoder, 
-                x, 
-                input_phase_condition,
-                use_reentrant=False
-            )
-            # Use gradient checkpointing for decoder with explicit use_reentrant=False
-            return checkpoint(
-                self.decoder, 
-                z, 
-                output_phase_condition,
-                use_reentrant=False
-            )
-        else:
+        print(f"[Autoencoder] Forward called")
+        if not self.use_checkpoint:
             z = self.encoder(x, input_phase_condition)
             return self.decoder(z, output_phase_condition)
+
+        # Use gradient checkpointing with strict tensor handling
+        def custom_encoder_forward(*inputs):
+            print(f"[Autoencoder] Checkpointed encoder_forward")
+            return self._encoder_forward(*inputs)
+
+        def custom_decoder_forward(*inputs):
+            print(f"[Autoencoder] Checkpointed decoder_forward")
+            return self._decoder_forward(*inputs)
+
+        # Forward pass through encoder with checkpointing
+        z = checkpoint(
+            custom_encoder_forward,
+            x,
+            input_phase_condition,
+            preserve_rng_state=True,
+            use_reentrant=False
+        )
+
+        # Forward pass through decoder with checkpointing
+        return checkpoint(
+            custom_decoder_forward,
+            z,
+            output_phase_condition,
+            preserve_rng_state=True,
+            use_reentrant=False
+        )

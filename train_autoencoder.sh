@@ -1,0 +1,1 @@
+python train_autoencoder.py     --data_dir utils/debug/ncct_cect/vindr_ds/registered_volumes/     --output_dir checkpoints/     --avg_volumes_dir utils/debug/ncct_cect/vindr_ds/average_volumes/     --labels_path utils/debug/ncct_cect/vindr_ds/labels.csv     --batch_size 1     --num_epochs 100     --learning_rate 1e-4     --device cuda     --use_checkpointing

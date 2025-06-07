@@ -48,19 +48,16 @@ class PhaseVolumeDataset(Dataset):
             if not filename.endswith('_registered.nii.gz'):
                 continue
                 
-            # Extract study_id and series_id from filename
-            parts = filename.replace('_registered.nii.gz', '').split('_')
-            if len(parts) != 2:
-                print(f"Skipping {filename} - invalid format")
-                continue
-                
-            study_id, series_id = parts
-            phase = self.phase_map.get((study_id, series_id))
+            # Extract series_id from filename
+            series_id = filename.replace('_registered.nii.gz', '')
+            
+            # Get phase for this volume
+            phase = self.phase_map.get(series_id)
             if phase is None:
                 print(f"Warning: No phase label found for {filename}")
                 continue
                 
-            self.volume_paths.append((filename, study_id, series_id, phase))
+            self.volume_paths.append((filename, series_id, phase))
         
         print(f"Found {len(self.volume_paths)} registered volumes")
     
@@ -69,17 +66,16 @@ class PhaseVolumeDataset(Dataset):
         df = pd.read_csv(labels_path)
         phase_map = {}
         for _, row in df.iterrows():
-            study_id = row['StudyInstanceUID']
             series_id = row['SeriesInstanceUID']
             phase = row['Label'].lower()
-            phase_map[(study_id, series_id)] = phase
+            phase_map[series_id] = phase
         return phase_map
     
     def __len__(self):
         return len(self.volume_paths)
     
     def __getitem__(self, idx):
-        filename, study_id, series_id, input_phase = self.volume_paths[idx]
+        filename, series_id, input_phase = self.volume_paths[idx]
         
         # Load and preprocess input volume
         vol_path = self.registered_dir / filename
@@ -132,7 +128,6 @@ class PhaseVolumeDataset(Dataset):
             'raw_volume': input_volume,  # Original normalized input volume
             'input_avg_volume': input_avg_volume,  # Average volume of input phase
             'phase_conditions': phase_conditions,  # All phase average volumes for conditioning
-            'study_id': study_id,
             'series_id': series_id,
             'original_size': vol.GetSize(),  # Store original size for reference
             'original_spacing': vol.GetSpacing()  # Store original spacing for reference

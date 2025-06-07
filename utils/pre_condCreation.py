@@ -31,6 +31,9 @@ def create_average_volumes(registered_dir, labels_path, output_dir):
         'Other': []
     }
     
+    # List to store all volumes for overall average
+    all_volumes = []
+    
     # Load all registered volumes and group by phase
     for filename in os.listdir(registered_dir):
         if not filename.endswith('_registered.nii.gz'):
@@ -50,6 +53,7 @@ def create_average_volumes(registered_dir, labels_path, output_dir):
         try:
             volume = sitk.ReadImage(volume_path)
             phase_volumes[phase].append(volume)
+            all_volumes.append(volume)  # Add to overall volumes list
         except Exception as e:
             print(f"Error loading {filename}: {str(e)}")
     
@@ -77,6 +81,29 @@ def create_average_volumes(registered_dir, labels_path, output_dir):
         output_path = os.path.join(output_dir, f"average_{phase.lower()}.nii.gz")
         sitk.WriteImage(avg_volume, output_path)
         print(f"Saved average volume to {output_path}")
+    
+    # Create overall average volume
+    if all_volumes:
+        print(f"Creating overall average volume from all {len(all_volumes)} volumes")
+        
+        # Convert all volumes to numpy arrays
+        arrays = [sitk.GetArrayFromImage(vol) for vol in all_volumes]
+        
+        # Compute average
+        avg_array = np.mean(arrays, axis=0)
+        
+        # Convert back to SimpleITK image
+        avg_volume = sitk.GetImageFromArray(avg_array)
+        
+        # Copy metadata from first volume
+        avg_volume.CopyInformation(all_volumes[0])
+        
+        # Save average volume
+        output_path = os.path.join(output_dir, "average_all.nii.gz")
+        sitk.WriteImage(avg_volume, output_path)
+        print(f"Saved overall average volume to {output_path}")
+    else:
+        print("No volumes found to create overall average")
 
 if __name__ == "__main__":
     PATH = "utils/debug/ncct_cect/vindr_ds"

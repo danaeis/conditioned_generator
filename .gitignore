@@ -28,3 +28,4 @@ batch*
 .nrrd
 .nii
 debug/
+checkpoint/*

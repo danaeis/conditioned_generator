@@ -114,10 +114,10 @@ def register_to_atlas(fixed_image, moving_image, transform_type='multi_step'):
         logging.info("Affine registration completed")
         
         # Step 3: BSpline registration (optional, more accurate but slower)
-        logging.info("Starting BSpline registration...")
-        final_transform = perform_bspline_registration(fixed_image, moving_image, affine_transform)
-        logging.info("BSpline registration completed")
-        
+        # logging.info("Starting BSpline registration...")
+        # final_transform = perform_bspline_registration(fixed_image, moving_image, affine_transform)
+        # logging.info("BSpline registration completed")
+        final_transform = affine_transform
         # Resample using final transform
         logging.info("Resampling final image...")
         registered_image = sitk.Resample(moving_image, fixed_image, final_transform,

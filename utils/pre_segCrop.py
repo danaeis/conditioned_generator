@@ -187,18 +187,11 @@ for seg_file in seg_files:
         print("Unique values in seg_data:", np.unique(seg_data))
 
         start_slice = None
-        for z in range(seg_data.shape[2]):  # assuming z-axis is the third dimension
+        for z in reversed(range(seg_data.shape[2])):  # assuming z-axis is the third dimension
             slice_data = seg_data[:, :, z]
             if np.any(np.isin(slice_data, list(INCLUDED_LABELS))):
                 start_slice = z
                 break
-
-        if start_slice is not None:
-            print(f"First slice with target labels: {start_slice}")
-            # Crop the volume
-            cropped_seg_data = seg_data[:, :, start_slice:]
-        else:
-            print("No target labels found in the volume.")
         
         # Use the pre-computed mapping to get the original volume path
         if series_id in series_to_original_path:
