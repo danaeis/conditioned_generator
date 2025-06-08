@@ -154,6 +154,7 @@ class Discriminator(nn.Module):
         x = x.view(B, -1)
         return torch.sigmoid(self.fc(x))
 
+
 def visualize_batch(batch, output, epoch, batch_idx, save_dir='visualizations'):
     """Visualize a batch of data and model outputs."""
     os.makedirs(save_dir, exist_ok=True)

@@ -68,6 +68,11 @@ def create_average_volumes(registered_dir, labels_path, output_dir):
         # Convert volumes to numpy arrays
         arrays = [sitk.GetArrayFromImage(vol) for vol in volumes]
         
+        # Debug: Print shapes of all arrays
+        print(f"\nDebugging array shapes for {phase} phase:")
+        for i, arr in enumerate(arrays):
+            print(f"Array {i} shape: {arr.shape}")
+        
         # Compute average
         avg_array = np.mean(arrays, axis=0)
         

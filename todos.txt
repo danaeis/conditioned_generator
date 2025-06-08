@@ -1,7 +1,18 @@
 TODO:
-check the transforms artifacts in the outer body region --> causes missleading information in the average volumes
-delete (zero) the outer body region 
-check the model pipeline ---> dimensions of input/output is not ok
+
+finish the model pipeline
+train model on full dataset and report results
+apply different registration methods
+    -> background removal
+    -> bbox arround the abdomen region
+    -> resize
+    -> apply previous registration methods
+    -> Diffeomorphic methods
+    -> voxelmorph
+    -> apply tsne to check the clusters in the model
+    -> apply multi atlas registration
+    
+done check the model pipeline ---> dimensions of input/output is not ok
 
 ---------------------
 done fix model dimentions-> output volume doesnt match the input volume
