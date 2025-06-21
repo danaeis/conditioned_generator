@@ -4,6 +4,39 @@ import SimpleITK as sitk
 import pandas as pd
 from registration_utils import compute_quick_metric, register_to_atlas, log_progress
 from tqdm import tqdm
+import nibabel as nib
+import numpy as np
+from skimage.transform import resize
+from volume_utils import process_ct_and_crop_abdomen
+
+
+def get_nifti_dimensions(file_path):
+    """Load NIfTI file and return its data, dimensions, and header."""
+    img = nib.load(file_path)
+    data = img.get_fdata()
+    return data, data.shape, img.header
+
+def find_smallest_dimensions(file_paths):
+    """Find the smallest dimensions across all volumes."""
+    dimensions = []
+    for file_path in file_paths:
+        _, shape, _ = get_nifti_dimensions(file_path)
+        dimensions.append(shape)
+    return tuple(np.min(dimensions, axis=0))
+
+
+def rescale_volume(data, target_shape):
+    """Rescale volume to target shape using interpolation."""
+    zoom_factors = [t / s for t, s in zip(target_shape, data.shape)]
+    rescaled = resize(data, target_shape, order=1, anti_aliasing=True, preserve_range=True)
+    return rescaled
+
+def pad_to_shape(data, target_shape):
+    """Pad volume to target shape with minimal padding."""
+    current_shape = data.shape
+    padding = [(0, max(0, t - c)) for t, c in zip(target_shape, current_shape)]
+    padded = np.pad(data, padding, mode='constant', constant_values=0)
+    return padded, padding
 
 def load_phase_labels(labels_path):
     """Load phase labels from CSV file."""
@@ -73,42 +106,62 @@ def main(input_dir, output_dir, labels_path):
     log_progress(f"Input directory: {input_dir}")
     log_progress(f"Output directory: {output_dir}")
 
-    # Step 1: Load phase labels and find all volume paths
+    # Load phase labels and find all volume paths
     phase_map = load_phase_labels(labels_path)
     volume_paths = load_images_from_directory(input_dir)
     
-    # Step 2: Select atlas by loading only non-contrast volumes
-    log_progress("Loading non-contrast volumes for atlas selection...")
-    non_contrast_volumes = {}
-    for key, path in tqdm(volume_paths.items(), desc="Loading non-contrast volumes"):
-        if phase_map.get(key, "").lower() == "non-contrast":
-            try:
-                non_contrast_volumes[key] = sitk.ReadImage(path)
-            except Exception as e:
-                log_progress(f"Failed to load non-contrast volume {key}: {e}", level='warning')
-                continue
+    # First pass: Process all volumes to remove CT table while maintaining dimensions
+    processed_volumes = {}
+    for key, path in tqdm(volume_paths.items(), desc="Preprocessing volumes"):
+        try:
+            # Load volume
+            img = nib.load(path)
+            data = img.get_fdata()
+            
+            # Process volume (remove table, focus on abdomen) while maintaining dimensions
+            processed_data, processed_img = process_ct_and_crop_abdomen(data, img.affine)
+            processed_volumes[key] = processed_img
+            
+        except Exception as e:
+            log_progress(f"Failed to process volume {key}: {e}", level='error')
+            continue
+    
+    # Select atlas from non-contrast volumes
+    log_progress("Selecting atlas from non-contrast volumes...")
+    non_contrast_volumes = {
+        key: sitk.GetImageFromArray(vol.get_fdata()) 
+        for key, vol in processed_volumes.items() 
+        if phase_map.get(key, "").lower() == "non-contrast"
+    }
     
     if not non_contrast_volumes:
         raise ValueError("No valid non-contrast volumes could be loaded")
     
-    # Select atlas from non-contrast volumes
+    # Select atlas
     atlas_key, atlas_img = select_atlas(non_contrast_volumes, phase_map)
     
     # Clear non-contrast volumes from memory
     non_contrast_volumes.clear()
     
-    # Step 3: Process each volume by loading one at a time
+    # Process each volume by loading one at a time
     log_progress("Starting registration of volumes to atlas...")
-    for key, path in tqdm(volume_paths.items(), desc="Registering volumes"):
+    for key, vol in tqdm(processed_volumes.items(), desc="Registering volumes"):
         try:
             log_progress(f"Processing volume {key} (phase: {phase_map.get(key, 'unknown')})...")
-            moving_img = sitk.ReadImage(path)
             
-            # Process through register_to_atlas for all volumes, including atlas
+            # Convert to SimpleITK for registration
+            moving_img = sitk.GetImageFromArray(vol.get_fdata())
+            moving_img.CopyInformation(sitk.GetImageFromArray(processed_volumes[atlas_key].get_fdata()))
+            
+            # Register to atlas
             transform, registered_img = register_to_atlas(atlas_img, moving_img, is_atlas=(key == atlas_key))
             
+            # Convert back to NIfTI and save
+            registered_np = sitk.GetArrayFromImage(registered_img)
+            registered_nifti = nib.Nifti1Image(registered_np, vol.affine, header=vol.header)
+            
             out_path = os.path.join(output_dir, f"{key}_registered.nii.gz")
-            sitk.WriteImage(registered_img, out_path)
+            nib.save(registered_nifti, out_path)
             log_progress(f"✓ Saved registered image to {out_path}")
             
             # Clear memory

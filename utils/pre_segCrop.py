@@ -16,7 +16,7 @@ import SimpleITK as sitk
 from tqdm import tqdm
 
 from dicom_utils import process_original_volumes
-
+from volume_utils import process_ct_and_crop_abdomen
 
 # def get_crop_bounds(seg_mask, included_labels, z_margin=5):
 #     # Create a boolean array where each slice is True if it contains any of the included labels
@@ -132,34 +132,34 @@ cmd = [
     "--config_file", config_file
 ]
 
-try:
-    logging.info(f"Running command: {' '.join(cmd)}")
-    result = subprocess.run(
-        cmd,
-        check=True,
-        capture_output=True,
-        text=True
-    )
-    logging.info("Segmentation completed successfully")
-    logging.info("Command stdout:")
-    print(result.stdout) # Print stdout directly to see MONAI progress/messages
-    if result.stderr:
-        logging.warning("Command stderr:")
-        logging.warning(result.stderr) # Log stderr as warning
-except subprocess.CalledProcessError as e:
-    logging.error(f"Error running segmentation: {e}")
-    if e.stdout:
-        logging.error(f"Command stdout: {e.stdout}")
-    if e.stderr:
-        logging.error(f"Command stderr: {e.stderr}")
-    # Re-raise the exception to stop the script if segmentation fails
-    raise
-except FileNotFoundError:
-    logging.error(f"Error: python or monai.bundle command not found. Make sure your environment is set up correctly.")
-    raise
-except Exception as e:
-    logging.error(f"An unexpected error occurred during segmentation inference: {e}")
-    raise
+# try:
+#     logging.info(f"Running command: {' '.join(cmd)}")
+#     result = subprocess.run(
+#         cmd,
+#         check=True,
+#         capture_output=True,
+#         text=True
+#     )
+#     logging.info("Segmentation completed successfully")
+#     logging.info("Command stdout:")
+#     print(result.stdout) # Print stdout directly to see MONAI progress/messages
+#     if result.stderr:
+#         logging.warning("Command stderr:")
+#         logging.warning(result.stderr) # Log stderr as warning
+# except subprocess.CalledProcessError as e:
+#     logging.error(f"Error running segmentation: {e}")
+#     if e.stdout:
+#         logging.error(f"Command stdout: {e.stdout}")
+#     if e.stderr:
+#         logging.error(f"Command stderr: {e.stderr}")
+#     # Re-raise the exception to stop the script if segmentation fails
+#     raise
+# except FileNotFoundError:
+#     logging.error(f"Error: python or monai.bundle command not found. Make sure your environment is set up correctly.")
+#     raise
+# except Exception as e:
+#     logging.error(f"An unexpected error occurred during segmentation inference: {e}")
+#     raise
 
 # Step 4: Run cropping
 logging.info("Step 4: Running cropping")
@@ -200,9 +200,10 @@ for seg_file in seg_files:
                 orig_img = nib.load(orig_file)
                 orig_data = orig_img.get_fdata()
                 cropped_orig = orig_data[:, :, :start_slice]
-                cropped_orig_img = nib.Nifti1Image(cropped_orig, orig_img.affine, orig_img.header)
+                # find biunding box for abdomen region (remove background)
+                cropped_np, cropped_nifti = process_ct_and_crop_abdomen(cropped_orig, orig_img.affine)
                 output_orig_path = os.path.join(CROPPED_DIR, f"{series_id}.nii.gz")
-                nib.save(cropped_orig_img, output_orig_path)
+                nib.save(cropped_nifti, output_orig_path)
                 logging.info(f"Found and cropped original volume for {series_id}")
             else:
                 logging.warning(f"Original volume file not found for {series_id}")

@@ -200,7 +200,7 @@ def compute_quick_metric(fixed_image, moving_image, metric_type='ncc'):
 
 def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is_atlas=False):
     """
-    Enhanced registration with multi-step approach and optimized parameters.
+    Enhanced registration with improved parameters and preprocessing.
     
     Args:
         fixed_image: The atlas image
@@ -223,6 +223,10 @@ def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is
     
     log_progress(f"Atlas dimensions: {original_size}")
     log_progress(f"Moving image dimensions: {moving_image.GetSize()}")
+    
+    # Create body masks for both images
+    fixed_mask = sitk.BinaryThreshold(fixed_image, -400, 1000)
+    moving_mask = sitk.BinaryThreshold(moving_image, -400, 1000)
     
     # Apply preprocessing to both images
     log_progress("Preprocessing images...")
@@ -247,21 +251,20 @@ def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is
         return sitk.Transform(3, sitk.sitkIdentity), registered_image
     
     if transform_type == 'multi_step':
-        # Step 1: Rigid registration
+        # Step 1: Rigid registration with improved parameters
         log_progress("Step 1/3: Performing rigid registration...")
-        rigid_transform = perform_rigid_registration(fixed_image, moving_image)
+        rigid_transform = perform_rigid_registration(fixed_image, moving_image, fixed_mask, moving_mask)
         log_progress("✓ Rigid registration completed")
         
         # Step 2: Affine registration using rigid result as initial transform
         log_progress("Step 2/3: Performing affine registration...")
-        affine_transform = perform_affine_registration(fixed_image, moving_image, rigid_transform)
+        affine_transform = perform_affine_registration(fixed_image, moving_image, rigid_transform, fixed_mask, moving_mask)
         log_progress("✓ Affine registration completed")
         
-        # Step 3: BSpline registration (optional, more accurate but slower)
+        # Step 3: BSpline registration with improved parameters
         log_progress("Step 3/3: Performing BSpline registration...")
-        final_transform = perform_bspline_registration(fixed_image, moving_image, affine_transform)
+        final_transform = perform_bspline_registration(fixed_image, moving_image, affine_transform, fixed_mask, moving_mask)
         log_progress("✓ BSpline registration completed")
-        # final_transform = affine_transform
         
         # Resample using final transform with explicit size and spacing
         log_progress("Resampling final image...")
@@ -270,7 +273,7 @@ def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is
         
         registered_image = sitk.Resample(
             moving_image,
-            original_size,  # Use original fixed image size
+            original_size,
             final_transform,
             sitk.sitkBSpline,
             original_origin,
@@ -280,9 +283,14 @@ def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is
             moving_image.GetPixelID()
         )
         
-        # Verify dimensions
+        # Verify dimensions and compute quality metrics
         if registered_image.GetSize() != original_size:
             log_progress(f"Warning: Resampled image size {registered_image.GetSize()} does not match atlas size {original_size}", level='warning')
+        
+        # Compute registration quality metrics
+        metric_before = compute_quick_metric(fixed_image, moving_image)
+        metric_after = compute_quick_metric(fixed_image, registered_image)
+        log_progress(f"Registration quality - Before: {metric_before:.4f}, After: {metric_after:.4f}")
         
         elapsed_time = time.time() - start_time
         log_progress(f"✓ Registration completed in {elapsed_time:.2f} seconds")
@@ -290,7 +298,7 @@ def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is
     else:
         # Fallback to original registration method
         log_progress("Using fallback registration method...")
-        return perform_affine_registration(fixed_image, moving_image)
+        return perform_affine_registration(fixed_image, moving_image, None, fixed_mask, moving_mask)
 
 class RegistrationProgressCallback:
     def __init__(self, total_iterations):
@@ -304,8 +312,8 @@ class RegistrationProgressCallback:
     def close(self):
         self.pbar.close()
 
-def perform_rigid_registration(fixed_image, moving_image, initial_transform=None):
-    """Perform rigid registration with optimized parameters."""
+def perform_rigid_registration(fixed_image, moving_image, fixed_mask=None, moving_mask=None, initial_transform=None):
+    """Perform rigid registration with optimized parameters and mask support."""
     start_time = time.time()
     
     # Cast images to float32 for registration compatibility
@@ -318,25 +326,30 @@ def perform_rigid_registration(fixed_image, moving_image, initial_transform=None
     
     registration_method = sitk.ImageRegistrationMethod()
     
-    # Metric
-    registration_method.SetMetricAsMattesMutualInformation(16)
+    # Metric - Use Mattes Mutual Information with more bins and higher sampling
+    registration_method.SetMetricAsMattesMutualInformation(32)  # Increased number of bins
     registration_method.SetMetricSamplingStrategy(registration_method.RANDOM)
-    registration_method.SetMetricSamplingPercentage(0.1)
+    registration_method.SetMetricSamplingPercentage(0.2)  # Increased sampling percentage
     
-    # Interpolator
-    registration_method.SetInterpolator(sitk.sitkLinear)
+    # Use masks if provided
+    if fixed_mask is not None and moving_mask is not None:
+        registration_method.SetMetricFixedMask(fixed_mask)
+        registration_method.SetMetricMovingMask(moving_mask)
     
-    # Optimizer
-    num_iterations = 50
+    # Interpolator - Use BSpline for better accuracy
+    registration_method.SetInterpolator(sitk.sitkBSpline)
+    
+    # Optimizer - Use gradient descent with improved parameters
+    num_iterations = 100  # Increased iterations
     registration_method.SetOptimizerAsGradientDescent(
-        learningRate=1.0,
+        learningRate=2.0,  # Increased learning rate
         numberOfIterations=num_iterations,
-        convergenceMinimumValue=1e-4,
-        convergenceWindowSize=5
+        convergenceMinimumValue=1e-6,  # Stricter convergence
+        convergenceWindowSize=10  # Larger window for convergence check
     )
     registration_method.SetOptimizerScalesFromPhysicalShift()
     
-    # Initial transform
+    # Initial transform - Use geometry-based initialization
     if initial_transform is None:
         initial_transform = sitk.CenteredTransformInitializer(
             fixed_image, moving_image, sitk.Euler3DTransform(),
@@ -345,9 +358,9 @@ def perform_rigid_registration(fixed_image, moving_image, initial_transform=None
     
     registration_method.SetInitialTransform(initial_transform)
     
-    # Multi-resolution framework
-    registration_method.SetShrinkFactorsPerLevel(shrinkFactors=[8,4,2])
-    registration_method.SetSmoothingSigmasPerLevel(smoothingSigmas=[4,2,1])
+    # Multi-resolution framework - More levels for better coarse-to-fine registration
+    registration_method.SetShrinkFactorsPerLevel(shrinkFactors=[16,8,4,2])  # More levels
+    registration_method.SetSmoothingSigmasPerLevel(smoothingSigmas=[8,4,2,1])  # Adjusted sigmas
     registration_method.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
     
     # Add progress callback with tqdm
