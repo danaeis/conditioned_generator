@@ -175,37 +175,51 @@ def auto_detect_z_range(volume, threshold=-300):
         raise ValueError("No tissue found.")
     return indices[0], indices[-1]
 
+def get_body_mask_robust(volume_np):
+    """
+    Find the body mask using Otsu's thresholding and largest component.
+    This is more robust than a fixed HU threshold.
+    """
+    from skimage.filters import threshold_otsu
+    from scipy.ndimage import label, binary_fill_holes
+
+    # Compute Otsu threshold on the whole volume
+    flat = volume_np.flatten()
+    # Remove extreme air values for Otsu
+    flat = flat[flat > -900]
+    otsu_thresh = threshold_otsu(flat)
+    rough_mask = volume_np > otsu_thresh
+
+    # Largest connected component
+    labeled, num = label(rough_mask)
+    if num == 0:
+        raise ValueError("No body found in CT.")
+    largest = (labeled == (np.bincount(labeled.flat)[1:].argmax() + 1))
+    filled = binary_fill_holes(largest)
+    return filled
 
 def process_ct_and_crop_abdomen(volume_np, original_affine):
     """
-    Process CT volume by removing table and focusing on abdomen region while maintaining dimensions.
-
-    Args:
-        volume_np (np.ndarray): 3D CT volume [z, y, x]
-        original_affine (np.ndarray): Affine matrix from the original full image.
-
-    Returns:
-        processed_np (np.ndarray): Processed volume with table removed and abdomen focused.
-        processed_img (nib.Nifti1Image): NIfTI image with updated affine.
+    Process CT volume by robustly finding the body mask and focusing on abdomen region.
     """
-    # Step 1: Remove CT table and other non-body regions
-    masked_np = remove_ct_table(volume_np)
+    # Step 1: Find robust body mask
+    body_mask = get_body_mask_robust(volume_np)
 
     # Step 2: Detect Z-range with actual body
-    z_min, z_max = auto_detect_z_range(masked_np)
+    z_min, z_max = auto_detect_z_range(body_mask)
     if z_min >= z_max:
         raise ValueError("No valid z range found for abdomen cropping.")
 
     # Step 3: Compute abdomen bounding box from body mask in that z range
-    bbox = get_abdomen_bbox(masked_np, z_min=z_min, z_max=z_max)
+    bbox = get_abdomen_bbox(body_mask.astype(np.uint8), z_min=z_min, z_max=z_max, threshold=0)
     
     # Step 4: Create a mask for the abdomen region
-    abdomen_mask = np.zeros_like(masked_np, dtype=bool)
+    abdomen_mask = np.zeros_like(body_mask, dtype=bool)
     abdomen_mask[bbox] = True
-    
+    abdomen_mask &= body_mask  # Only keep inside the body
+
     # Step 5: Apply the mask to focus on abdomen while maintaining dimensions
-    # Use -1000 (air) for non-abdomen regions
-    processed_np = np.where(abdomen_mask, masked_np, -1000)
+    processed_np = np.where(abdomen_mask, volume_np, -1000)
 
     # Step 6: Create new NIfTI image with original affine
     processed_img = nib.Nifti1Image(processed_np, affine=original_affine)

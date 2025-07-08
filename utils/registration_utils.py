@@ -198,7 +198,30 @@ def compute_quick_metric(fixed_image, moving_image, metric_type='ncc'):
         logging.info(f"Metric computation took {elapsed_time:.2f} seconds")
         return -metric_value
 
-def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is_atlas=False):
+def perform_demons_registration(fixed_image, moving_image, num_iterations=50, std_dev=1.0):
+    """Perform Demons registration using SimpleITK's DemonsRegistrationFilter."""
+    start_time = time.time()
+    # Cast images to float32 for registration compatibility
+    fixed_image = sitk.Cast(fixed_image, sitk.sitkFloat32)
+    moving_image = sitk.Cast(moving_image, sitk.sitkFloat32)
+    log_progress(f"Fixed image size: {fixed_image.GetSize()}, spacing: {fixed_image.GetSpacing()}")
+    log_progress(f"Moving image size: {moving_image.GetSize()}, spacing: {moving_image.GetSpacing()}")
+    demons_filter = sitk.DemonsRegistrationFilter()
+    demons_filter.SetNumberOfIterations(num_iterations)
+    demons_filter.SetStandardDeviations(std_dev)
+    demons_filter.SetSmoothDisplacementField(True)
+    demons_filter.SetSmoothUpdateField(True)
+    displacement_field = demons_filter.Execute(fixed_image, moving_image)
+    transform = sitk.DisplacementFieldTransform(displacement_field)
+    registered_image = sitk.Resample(
+        moving_image, fixed_image, transform,
+        sitk.sitkLinear, 0.0, moving_image.GetPixelID()
+    )
+    elapsed_time = time.time() - start_time
+    log_progress(f"Demons registration completed in {elapsed_time:.2f} seconds (RMS: {demons_filter.GetRMSChange():.6f})")
+    return transform, registered_image
+
+def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is_atlas=False, phase="other", debug_dir=None, key=None):
     """
     Enhanced registration with improved parameters and preprocessing.
     
@@ -207,32 +230,31 @@ def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is
         moving_image: The image to register
         transform_type: Type of registration to perform
         is_atlas: Whether the moving image is the atlas itself
+        debug_dir: Directory for debug images and transforms
+        key: Key for naming debug files
     """
     start_time = time.time()
-    
     # Cast images to float32 for registration compatibility
     log_progress("Starting registration process...")
     fixed_image = sitk.Cast(fixed_image, sitk.sitkFloat32)
     moving_image = sitk.Cast(moving_image, sitk.sitkFloat32)
-    
     # Store original fixed image size for final resampling
     original_size = fixed_image.GetSize()
     original_spacing = fixed_image.GetSpacing()
     original_direction = fixed_image.GetDirection()
     original_origin = fixed_image.GetOrigin()
-    
     log_progress(f"Atlas dimensions: {original_size}")
     log_progress(f"Moving image dimensions: {moving_image.GetSize()}")
-    
     # Create body masks for both images
     fixed_mask = sitk.BinaryThreshold(fixed_image, -400, 1000)
     moving_mask = sitk.BinaryThreshold(moving_image, -400, 1000)
-    
     # Apply preprocessing to both images
     log_progress("Preprocessing images...")
-    fixed_image = preprocess_image(fixed_image, normalize=True, pad=True)
-    moving_image = preprocess_image(moving_image, normalize=True, pad=True)
-    
+    # fixed_image = preprocess_image(fixed_image, normalize=True, pad=True)
+    # moving_image = preprocess_image(moving_image, normalize=True, pad=True)
+    if debug_dir and key:
+        sitk.WriteImage(fixed_image, os.path.join(debug_dir, f"atlas_fixed.nii.gz"))
+        sitk.WriteImage(moving_image, os.path.join(debug_dir, f"{key}_moving.nii.gz"))
     if is_atlas:
         # For atlas, just resample to ensure consistent dimensions
         log_progress("Processing atlas image...")
@@ -249,56 +271,88 @@ def register_to_atlas(fixed_image, moving_image, transform_type='multi_step', is
         )
         log_progress("✓ Atlas preprocessing completed")
         return sitk.Transform(3, sitk.sitkIdentity), registered_image
-    
+
+    debug_dir = os.path.join(debug_dir, phase)
+    os.makedirs(debug_dir, exist_ok=True)
+
     if transform_type == 'multi_step':
-        # Step 1: Rigid registration with improved parameters
-        log_progress("Step 1/3: Performing rigid registration...")
-        rigid_transform = perform_rigid_registration(fixed_image, moving_image, fixed_mask, moving_mask)
-        log_progress("✓ Rigid registration completed")
-        
-        # Step 2: Affine registration using rigid result as initial transform
-        log_progress("Step 2/3: Performing affine registration...")
-        affine_transform = perform_affine_registration(fixed_image, moving_image, rigid_transform, fixed_mask, moving_mask)
-        log_progress("✓ Affine registration completed")
-        
-        # Step 3: BSpline registration with improved parameters
-        log_progress("Step 3/3: Performing BSpline registration...")
-        final_transform = perform_bspline_registration(fixed_image, moving_image, affine_transform, fixed_mask, moving_mask)
-        log_progress("✓ BSpline registration completed")
-        
-        # Resample using final transform with explicit size and spacing
-        log_progress("Resampling final image...")
-        log_progress(f"Resampling to size: {original_size}")
-        log_progress(f"Resampling to spacing: {original_spacing}")
-        
-        registered_image = sitk.Resample(
-            moving_image,
-            original_size,
-            final_transform,
-            sitk.sitkBSpline,
-            original_origin,
-            original_spacing,
-            original_direction,
-            0.0,
-            moving_image.GetPixelID()
-        )
-        
-        # Verify dimensions and compute quality metrics
-        if registered_image.GetSize() != original_size:
-            log_progress(f"Warning: Resampled image size {registered_image.GetSize()} does not match atlas size {original_size}", level='warning')
-        
-        # Compute registration quality metrics
         metric_before = compute_quick_metric(fixed_image, moving_image)
-        metric_after = compute_quick_metric(fixed_image, registered_image)
-        log_progress(f"Registration quality - Before: {metric_before:.4f}, After: {metric_after:.4f}")
+        best_metric = metric_before
+        best_transform = None
+        registered_image = moving_image
+        # Step 1: Rigid registration with improved parameters
+        log_progress("Step 1/4: Performing rigid registration...")
+        rigid_transform = perform_rigid_registration(fixed_image, moving_image)
+        rigid_img = sitk.Resample(moving_image, fixed_image, rigid_transform, sitk.sitkBSpline, 0.0, moving_image.GetPixelID())
+        if debug_dir and key:
+            sitk.WriteImage(rigid_img, os.path.join(debug_dir, f"{key}_rigid.nii.gz"))
+            sitk.WriteTransform(rigid_transform, os.path.join(debug_dir, f"{key}_rigid.tfm"))
+        log_progress("✓ Rigid registration completed")
+        if rigid_img.GetSize() != original_size:
+            log_progress(f"Warning: Resampled image size {rigid_img.GetSize()} does not match atlas size {original_size}", level='warning')
+        metric_rigid = compute_quick_metric(fixed_image, rigid_img)
+        if metric_rigid > best_metric:
+            best_metric = metric_rigid
+            best_transform = rigid_transform
+            registered_image = rigid_img
+        # Step 2: Affine registration using rigid result as initial transform
+        log_progress("Step 2/4: Performing affine registration...")
+        affine_transform = perform_affine_registration(fixed_image, moving_image, rigid_transform)
+        affine_img = sitk.Resample(moving_image, fixed_image, affine_transform, sitk.sitkBSpline, 0.0, moving_image.GetPixelID())
+        if debug_dir and key:
+            sitk.WriteImage(affine_img, os.path.join(debug_dir, f"{key}_affine.nii.gz"))
+            sitk.WriteTransform(affine_transform, os.path.join(debug_dir, f"{key}_affine.tfm"))
+        log_progress("✓ Affine registration completed")
+        if affine_img.GetSize() != original_size:
+            log_progress(f"Warning: Resampled image size {affine_img.GetSize()} does not match atlas size {original_size}", level='warning')
+        metric_affine = compute_quick_metric(fixed_image, affine_img)
+        if metric_affine > best_metric:
+            best_metric = metric_affine
+            best_transform = affine_transform
+            registered_image = affine_img
+        # Step 3: BSpline registration with improved parameters
+        log_progress("Step 3/4: Performing BSpline registration...")
+        bspline_transform = perform_bspline_registration(fixed_image, moving_image, affine_transform)
+        bspline_img = sitk.Resample(moving_image, fixed_image, bspline_transform, sitk.sitkBSpline, 0.0, moving_image.GetPixelID())
+        if debug_dir and key:
+            sitk.WriteImage(bspline_img, os.path.join(debug_dir, f"{key}_bspline.nii.gz"))
+            sitk.WriteTransform(bspline_transform, os.path.join(debug_dir, f"{key}_bspline.tfm"))
+        log_progress("✓ BSpline registration completed")
+        if bspline_img.GetSize() != original_size:
+            log_progress(f"Warning: Resampled image size {bspline_img.GetSize()} does not match atlas size {original_size}", level='warning')
+        metric_bspline = compute_quick_metric(fixed_image, bspline_img)
+        if metric_bspline > best_metric:
+            best_metric = metric_bspline
+            best_transform = bspline_transform
+            registered_image = bspline_img
+        # Step 4: Demons registration
+        log_progress("Step 4/4: Performing Demons registration...")
+        demons_transform, demons_img = perform_demons_registration(fixed_image, moving_image)
+        if debug_dir and key:
+            sitk.WriteImage(demons_img, os.path.join(debug_dir, f"{key}_demons.nii.gz"))
+            sitk.WriteTransform(demons_transform, os.path.join(debug_dir, f"{key}_demons.tfm"))
+        log_progress("✓ Demons registration completed")
+        if demons_img.GetSize() != original_size:
+            log_progress(f"Warning: Resampled image size {demons_img.GetSize()} does not match atlas size {original_size}", level='warning')
+        metric_demons = compute_quick_metric(fixed_image, demons_img)
+        if metric_demons > best_metric:
+            best_metric = metric_demons
+            best_transform = demons_transform
+            registered_image = demons_img
         
+        log_progress(f"Registration quality - Before: {metric_before:.4f}, After rigid: {metric_rigid:.4f}, After affine: {metric_affine:.4f}, After bspline: {metric_bspline:.4f}, After demons: {metric_demons:.4f}")
         elapsed_time = time.time() - start_time
         log_progress(f"✓ Registration completed in {elapsed_time:.2f} seconds")
-        return final_transform, registered_image
+        return best_transform, registered_image
+
     else:
         # Fallback to original registration method
-        log_progress("Using fallback registration method...")
-        return perform_affine_registration(fixed_image, moving_image, None, fixed_mask, moving_mask)
+        log_progress("Performing affine-only registration...")
+        affine_transform, affine_img = perform_affine_registration(fixed_image, moving_image, None, fixed_mask, moving_mask)
+        if debug_dir and key:
+            sitk.WriteImage(affine_img, os.path.join(debug_dir, f"{key}_affine.nii.gz"))
+            sitk.WriteTransform(affine_transform, os.path.join(debug_dir, f"{key}_affine.tfm"))
+        return affine_transform, affine_img
 
 class RegistrationProgressCallback:
     def __init__(self, total_iterations):

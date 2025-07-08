@@ -33,7 +33,7 @@ from volume_utils import process_ct_and_crop_abdomen
 #     return z_min, z_max
 
 # Configure logging with absolute path
-workspace_root = Path("/media/disk1/saeedeh_danaei/conditioned_generator")
+workspace_root = Path("./")
 log_dir = workspace_root / "logs"
 log_dir.mkdir(exist_ok=True)
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -68,6 +68,7 @@ CACHE_PATH = '../ncct_cect/vindr_ds/cached_dicom_series.pkl'
 
 DEBUG_DIR = 'utils/debug/ncct_cect/vindr_ds/'
 ALIGNED_SLICES_DIR = DEBUG_DIR + 'aligned_slices'
+# CROPPED_DIR = DEBUG_DIR + 'cropped_volumes'
 CROPPED_DIR = DEBUG_DIR + 'cropped_volumes'
 RESAMPLED_DIR = DEBUG_DIR + 'resampled_volumes'
 SEGMENTATION_DIR = DEBUG_DIR + 'segmentation_masks'
@@ -200,8 +201,10 @@ for seg_file in seg_files:
                 orig_img = nib.load(orig_file)
                 orig_data = orig_img.get_fdata()
                 cropped_orig = orig_data[:, :, :start_slice]
+                cropped_orig = np.transpose(cropped_orig, (2, 1, 0))
                 # find biunding box for abdomen region (remove background)
                 cropped_np, cropped_nifti = process_ct_and_crop_abdomen(cropped_orig, orig_img.affine)
+                cropped_nifti = nib.Nifti1Image(np.transpose(cropped_np, (2, 1, 0)), orig_img.affine)
                 output_orig_path = os.path.join(CROPPED_DIR, f"{series_id}.nii.gz")
                 nib.save(cropped_nifti, output_orig_path)
                 logging.info(f"Found and cropped original volume for {series_id}")

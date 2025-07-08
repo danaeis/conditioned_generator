@@ -66,39 +66,34 @@ def load_images_from_directory(input_dir):
     log_progress(f"✓ Found {len(volume_paths)} NIfTI files")
     return volume_paths
 
-def select_atlas(volumes, phase_map):
+def select_atlas(non_contrast_paths_dict):
     """
     Select the most representative volume (atlas) using average similarity.
     Only considers non-contrast volumes as atlas candidates.
+    non_contrast_paths_dict: {key: file_path}
     """
-    # Filter for non-contrast volumes only
-    non_contrast_volumes = {
-        key: img for key, img in volumes.items() 
-        if phase_map.get(key, "").lower() == "non-contrast"
-    }
-    
-    if not non_contrast_volumes:
-        raise ValueError("No non-contrast volumes found for atlas selection")
-        
-    volume_keys = list(non_contrast_volumes.keys())
+    volume_keys = list(non_contrast_paths_dict.keys())
     log_progress(f"Selecting atlas from {len(volume_keys)} non-contrast volumes...")
-    
     metrics = {}
     for i in tqdm(range(len(volume_keys)), desc="Computing atlas metrics"):
         ref_key = volume_keys[i]
-        ref_img = non_contrast_volumes[ref_key]
+        ref_path = non_contrast_paths_dict[ref_key]
+        ref_img = sitk.ReadImage(ref_path)
         total_metric = 0
         for j in range(len(volume_keys)):
             if i == j:
                 continue
-            cmp_img = non_contrast_volumes[volume_keys[j]]
+            cmp_key = volume_keys[j]
+            cmp_path = non_contrast_paths_dict[cmp_key]
+            cmp_img = sitk.ReadImage(cmp_path)
             metric = compute_quick_metric(ref_img, cmp_img, metric_type='ncc')
             total_metric += metric
+            del cmp_img
         metrics[ref_key] = total_metric
-    
+        del ref_img
     best_key = min(metrics, key=metrics.get)
     log_progress(f"✓ Selected atlas: {best_key}")
-    return best_key, non_contrast_volumes[best_key]
+    return best_key, non_contrast_paths_dict[best_key]
 
 def main(input_dir, output_dir, labels_path):
     os.makedirs(output_dir, exist_ok=True)
@@ -109,61 +104,34 @@ def main(input_dir, output_dir, labels_path):
     # Load phase labels and find all volume paths
     phase_map = load_phase_labels(labels_path)
     volume_paths = load_images_from_directory(input_dir)
-    
-    # First pass: Process all volumes to remove CT table while maintaining dimensions
-    processed_volumes = {}
-    for key, path in tqdm(volume_paths.items(), desc="Preprocessing volumes"):
-        try:
-            # Load volume
-            img = nib.load(path)
-            data = img.get_fdata()
-            
-            # Process volume (remove table, focus on abdomen) while maintaining dimensions
-            processed_data, processed_img = process_ct_and_crop_abdomen(data, img.affine)
-            processed_volumes[key] = processed_img
-            
-        except Exception as e:
-            log_progress(f"Failed to process volume {key}: {e}", level='error')
-            continue
-    
-    # Select atlas from non-contrast volumes
-    log_progress("Selecting atlas from non-contrast volumes...")
-    non_contrast_volumes = {
-        key: sitk.GetImageFromArray(vol.get_fdata()) 
-        for key, vol in processed_volumes.items() 
-        if phase_map.get(key, "").lower() == "non-contrast"
-    }
-    
-    if not non_contrast_volumes:
+
+    # Build a dictionary of {key: (file_path, phase)}
+    volume_info = {key: (path, phase_map.get(key, 'unknown')) for key, path in volume_paths.items()}
+
+    # For atlas selection, get only non-contrast paths
+    non_contrast_paths_dict = {key: path for key, (path, phase) in volume_info.items() if phase == 'non-contrast'}
+    if not non_contrast_paths_dict:
         raise ValueError("No valid non-contrast volumes could be loaded")
-    
+
     # Select atlas
-    atlas_key, atlas_img = select_atlas(non_contrast_volumes, phase_map)
-    
-    # Clear non-contrast volumes from memory
-    non_contrast_volumes.clear()
-    
+    atlas_key, atlas_path = select_atlas(non_contrast_paths_dict)
+    atlas_img = sitk.ReadImage(atlas_path)
+
     # Process each volume by loading one at a time
     log_progress("Starting registration of volumes to atlas...")
-    for key, vol in tqdm(processed_volumes.items(), desc="Registering volumes"):
+    for key, (vol_path, phase) in tqdm(volume_info.items(), desc="Registering volumes"):
         try:
-            log_progress(f"Processing volume {key} (phase: {phase_map.get(key, 'unknown')})...")
-            
-            # Convert to SimpleITK for registration
-            moving_img = sitk.GetImageFromArray(vol.get_fdata())
-            moving_img.CopyInformation(sitk.GetImageFromArray(processed_volumes[atlas_key].get_fdata()))
-            
+            log_progress(f"Processing volume {key} (phase: {phase})...")
+            # Load atlas and moving volume
+            moving_img = sitk.ReadImage(vol_path)
             # Register to atlas
-            transform, registered_img = register_to_atlas(atlas_img, moving_img, is_atlas=(key == atlas_key))
-            
+            transform, registered_img = register_to_atlas(atlas_img, moving_img, is_atlas=(key == atlas_key), phase=phase, debug_dir="utils/debug/ncct_cect/vindr_ds/debug_registeration", key=key)
             # Convert back to NIfTI and save
-            registered_np = sitk.GetArrayFromImage(registered_img)
-            registered_nifti = nib.Nifti1Image(registered_np, vol.affine, header=vol.header)
-            
+            # registered_np = sitk.GetArrayFromImage(registered_img)
+            # For affine, try to get affine from the original NIfTI file
             out_path = os.path.join(output_dir, f"{key}_registered.nii.gz")
-            nib.save(registered_nifti, out_path)
+            sitk.WriteImage(registered_img, out_path)
             log_progress(f"✓ Saved registered image to {out_path}")
-            
             # Clear memory
             del moving_img
             del registered_img
@@ -171,11 +139,10 @@ def main(input_dir, output_dir, labels_path):
         except Exception as e:
             log_progress(f"Failed to process volume {key}: {e}", level='error')
             continue
-    
     log_progress("✓ Registration pipeline completed successfully")
 
 if __name__ == "__main__":
-    INPUT_DIR = "utils/debug/ncct_cect/vindr_ds/cropped_volumes"
+    INPUT_DIR = "utils/debug/ncct_cect/vindr_ds/padded_volumes"
     OUTPUT_DIR = "utils/debug/ncct_cect/vindr_ds/registered_volumes"
     LABELS_PATH = "utils/debug/ncct_cect/vindr_ds/labels.csv"
     main(INPUT_DIR, OUTPUT_DIR, LABELS_PATH)
