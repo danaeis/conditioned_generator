@@ -127,40 +127,50 @@ logging.info("Step 3: Running segmentation inference")
 logging.info(f"Running segmentation on device: {device}")
 # NOTE: The model weights in model.pt are a raw state_dict, not wrapped in a dict with a 'model' key.
 # The inference.yaml config is set to load the weights directly.
-config_file = "utils/bundles/multi_organ_segmentation/configs/inference.yaml"
+mos = "multi-organ-segmentation"
+ts = "totalsegmentator"
+model = ts
+
+if model == mos:
+    config_file = "utils/bundles/multi_organ_segmentation/configs/inference.yaml"
+elif model == ts:
+    config_file = "utils/bundles/wholeBody_ct_segmentation/configs/inference.json"
+
 cmd = [
     "python", "-m", "monai.bundle", "run",
     "--config_file", config_file
 ]
 
-# try:
-#     logging.info(f"Running command: {' '.join(cmd)}")
-#     result = subprocess.run(
-#         cmd,
-#         check=True,
-#         capture_output=True,
-#         text=True
-#     )
-#     logging.info("Segmentation completed successfully")
-#     logging.info("Command stdout:")
-#     print(result.stdout) # Print stdout directly to see MONAI progress/messages
-#     if result.stderr:
-#         logging.warning("Command stderr:")
-#         logging.warning(result.stderr) # Log stderr as warning
-# except subprocess.CalledProcessError as e:
-#     logging.error(f"Error running segmentation: {e}")
-#     if e.stdout:
-#         logging.error(f"Command stdout: {e.stdout}")
-#     if e.stderr:
-#         logging.error(f"Command stderr: {e.stderr}")
-#     # Re-raise the exception to stop the script if segmentation fails
-#     raise
-# except FileNotFoundError:
-#     logging.error(f"Error: python or monai.bundle command not found. Make sure your environment is set up correctly.")
-#     raise
-# except Exception as e:
-#     logging.error(f"An unexpected error occurred during segmentation inference: {e}")
-#     raise
+try:
+    logging.info(f"Running command: {' '.join(cmd)}")
+    result = subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        text=True
+    )
+    logging.info("Segmentation completed successfully")
+    logging.info("Command stdout:")
+    print(result.stdout) # Print stdout directly to see MONAI progress/messages
+    if result.stderr:
+        logging.warning("Command stderr:")
+        logging.warning(result.stderr) # Log stderr as warning
+except subprocess.CalledProcessError as e:
+    logging.error(f"Error running segmentation: {e}")
+    if e.stdout:
+        logging.error(f"Command stdout: {e.stdout}")
+    if e.stderr:
+        logging.error(f"Command stderr: {e.stderr}")
+    # Re-raise the exception to stop the script if segmentation fails
+    raise
+except FileNotFoundError:
+    logging.error(f"Error: python or monai.bundle command not found. Make sure your environment is set up correctly.")
+    raise
+except Exception as e:
+    logging.error(f"An unexpected error occurred during segmentation inference: {e}")
+    raise
+
+
 
 # Step 4: Run cropping
 logging.info("Step 4: Running cropping")
