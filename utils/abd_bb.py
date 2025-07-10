@@ -3,6 +3,7 @@ import numpy as np
 import SimpleITK as sitk  # pip install SimpleITK
 import scipy.ndimage
 import SimpleITK as sitk
+import json
 
 
 def shift_image_to_origin(image: sitk.Image, new_origin=(0.0, 0.0, 0.0), target_spacing=(1.0, 1.0, 1.0), is_label=False):
@@ -38,169 +39,150 @@ def shift_image_to_origin(image: sitk.Image, new_origin=(0.0, 0.0, 0.0), target_
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 vol_dir = os.path.join(script_dir, "debug/ncct_cect/vindr_ds/original_volumes")
-mask_dir = os.path.join(script_dir, "debug/ncct_cect/vindr_ds/segmentation_masks")
+mask_dir = os.path.join(script_dir, "debug/ncct_cect/vindr_ds/total_segmentation_masks")
 out_dir = os.path.join(script_dir, "debug/ncct_cect/vindr_ds/aggregated_cropped_volumes")
 os.makedirs(out_dir, exist_ok=True)
 print("Current working directory:", os.getcwd())
 
 target_spacing = (1.0,1.0,1.0)
 target_origin = (0.0, 0.0, 0.0)
-# 1. Gather all mask files
-mask_files = sorted([f for f in os.listdir(mask_dir) if f.endswith('.nii') or f.endswith('.nii.gz')])
-
 boxes = []
-
-# 2. Compute bounding boxes for each mask
-for mask_file in mask_files:
-    mask_path = os.path.join(mask_dir, mask_file)
-    mask_img_org = sitk.ReadImage(mask_path)
-    print(f"mask volume {mask_file} size: {mask_img_org.GetSize()}")
-    print(f"mask volume {mask_file} spacing: {mask_img_org.GetSpacing()}")
-    print(f"mask volume {mask_file} origin: {mask_img_org.GetOrigin()}")
-    print(f"mask volume {mask_file} direction: {mask_img_org.GetDirection()}")
-    mask_img = shift_image_to_origin(mask_img_org, target_origin, target_spacing, True)
-    print(f"mask volume {mask_file} after shift size: {mask_img.GetSize()}")
-    print(f"mask volume {mask_file} after shift spacing: {mask_img.GetSpacing()}")
-    print(f"mask volume {mask_file} after shift origin: {mask_img.GetOrigin()}")
-    print(f"mask volume {mask_file} after shift direction: {mask_img.GetDirection()}")
-    mask = sitk.GetArrayFromImage(mask_img_org)
-    # mask = np.transpose(mask, (2, 1, 0))  # sitk is z,y,x; numpy is x,y,z
-    # Remove small connected components
-    labeled_mask, num_features = scipy.ndimage.label(mask > 2)
-    component_sizes = np.bincount(labeled_mask.ravel())
-    # print(component_sizes)
-    # Zero is background, so skip it
-    too_small = component_sizes < 500
-    # too_small[0] = False
-    mask_cleaned = mask.copy()
-    mask_cleaned[too_small[labeled_mask]] = 0
-    mask = mask_cleaned
-    # if np.count_nonzero(mask) < 500:  # adjust this threshold as needed
-    #     print(f"Skipping {mask_file} due to too few foreground pixels.")
-    #     continue
+required_labels_path = "utils/bundles/wholeBody_ct_segmentation/configs/required_labels.json"
+with open(required_labels_path) as json_file:
+    required_labels = json.load(json_file)
+    required_labels = list(required_labels.values())
+    print(required_labels)
     
-    nonzero = np.argwhere(mask > 2)
+# 1. Gather all mask files
+mask_files = []
+for root, _, files in os.walk(mask_dir):
+    for f in files:
+        if f.endswith('.nii') or f.endswith('.nii.gz'):
+            mask_files.append(os.path.join(root, f))
+mask_files = sorted(mask_files)
+
+
+# 1. Compute global min/max for y and x axes across all masks for required labels
+all_y = []
+all_x = []
+mask_bboxes = []  # Store per-mask z min/max for later
+mask_debug_info = []
+min_voxel_threshold = 100  # Set your threshold here
+
+for mask_file in mask_files:
+    mask_img_org = sitk.ReadImage(mask_file)
+    mask = sitk.GetArrayFromImage(mask_img_org)
+    for label in required_labels:
+        binary_mask = (mask == label)
+        labeled_array, num_features = scipy.ndimage.label(binary_mask)
+        for comp in range(1, num_features + 1):
+            comp_mask = (labeled_array == comp)
+            voxel_count = np.sum(comp_mask)
+            if voxel_count < min_voxel_threshold:
+                # Find which z-slices this component appears in
+                z_slices = np.unique(np.where(comp_mask)[0])
+                print(f"Mask: {os.path.basename(mask_file)}, Label: {label}, Component: {comp}, Voxel count: {voxel_count}, Z-slices: {z_slices.tolist()}")
+                mask[comp_mask] = 0
+
+    mask_required = np.isin(mask, required_labels)
+    nonzero = np.argwhere(mask_required)
     if nonzero.size == 0:
-        continue  # skip empty masks
+        continue
     min_coords = nonzero.min(axis=0)
     max_coords = nonzero.max(axis=0)
-    boxes.append(np.concatenate([min_coords, max_coords]))
+    # (z, y, x)
+    all_y.extend([min_coords[1], max_coords[1]])
+    all_x.extend([min_coords[2], max_coords[2]])
+    mask_bboxes.append((mask_file, min_coords[0], max_coords[0], min_coords[1], max_coords[1], min_coords[2], max_coords[2]))
+    # Debug: unique labels and counts
+    unique, counts = np.unique(mask, return_counts=True)
+    label_counts = dict(zip(unique.tolist(), counts.tolist()))
+    mask_debug_info.append((mask_file, label_counts))
 
-    # Save the bounding box as a mask
-    bbox_mask = np.zeros_like(mask, dtype=np.uint8)
-    bbox_mask[
-        min_coords[0]:max_coords[0]+1,
-        min_coords[1]:max_coords[1]+1,
-        min_coords[2]:max_coords[2]+1
-    ] = 1
-    bbox_mask_img = sitk.GetImageFromArray(bbox_mask)
-    bbox_mask_img.CopyInformation(mask_img_org)
-    mask_file_name = mask_file.replace(".nii.gz", "")
-    out_path = os.path.join(out_dir, f"{mask_file_name}_bbox_mask.nii.gz")
-    sitk.WriteImage(bbox_mask_img, out_path)
-
-boxes = np.array(boxes)
-if len(boxes) == 0:
+if not all_y or not all_x:
     raise RuntimeError("No non-empty masks found!")
+global_ymin = min(all_y)
+global_ymax = max(all_y)
+global_xmin = min(all_x)
+global_xmax = max(all_x)
 
-# 3. Aggregate bounding boxes using percentiles
-loose_min = np.percentile(boxes[:, :3], 5, axis=0).astype(int)
-loose_max = np.percentile(boxes[:, 3:], 95, axis=0).astype(int)
 
-# 4. Loop over all subfolders in original_volumes
-for case_id in sorted(os.listdir(vol_dir)):
-    case_folder = os.path.join(vol_dir, case_id)
-    if not os.path.isdir(case_folder):
+
+
+
+# 2. Crop each image using per-image z min/max, but global y/x min/max
+for (mask_file, zmin, zmax, ymin, ymax, xmin, xmax) in mask_bboxes:
+    # Find corresponding volume file
+    mask_base = os.path.basename(mask_file)
+    if mask_base.endswith('_seg.nii.gz'):
+        vol_base = mask_base.replace('_seg.nii.gz', '.nii.gz')
+    elif mask_base.endswith('_seg.nii'):
+        vol_base = mask_base.replace('_seg.nii', '.nii')
+    else:
         continue
-    for vol_file in os.listdir(case_folder):
-        if not (vol_file.endswith('.nii') or vol_file.endswith('.nii.gz')):
+    found = False
+    for case_id in os.listdir(vol_dir):
+        case_folder = os.path.join(vol_dir, case_id)
+        if not os.path.isdir(case_folder):
             continue
-        vol_path = os.path.join(case_folder, vol_file)
-        # Construct mask file name based on case_id and extension
-        ext = '.nii.gz' if vol_file.endswith('.nii.gz') else '.nii'
-        vol_file_base = vol_file.replace(ext,"")
-        mask_file = vol_file_base + '_seg' + ext
-        mask_path = os.path.join(mask_dir, mask_file)
-        if not os.path.exists(mask_path):
-            continue
-        mask_img = sitk.ReadImage(mask_path)
-        mask = sitk.GetArrayFromImage(mask_img)
-        # mask = np.transpose(mask, (2, 1, 0))
-        if np.count_nonzero(mask) < 500:  # adjust this threshold as needed
-            print(f"Skipping {mask_file} due to too few foreground pixels.")
-            continue
-        vol_img = sitk.ReadImage(vol_path)
-        print(f"volume {vol_file_base} size: {vol_img.GetSize()}")
-        print(f"volume {vol_file_base} spacing: {vol_img.GetSpacing()}")
-        print(f"volume {vol_file_base} origin: {vol_img.GetOrigin()}")
-        print(f"volume {vol_file_base} direction: {vol_img.GetDirection()}")
-        vol_img = shift_image_to_origin(vol_img, target_origin, target_spacing)
-        vol = sitk.GetArrayFromImage(vol_img)
-        # vol = np.transpose(vol, (2, 1, 0))
-        print(f"volume {vol_file_base}after shifting size: {vol_img.GetSize()}")
-        print(f"volume {vol_file_base} after shifting spacing: {vol_img.GetSpacing()}")
-        print(f"volume {vol_file_base} after shifting origin: {vol_img.GetOrigin()}")
-        print(f"volume {vol_file_base} after shifting direction: {vol_img.GetDirection()}")
-        cropped = vol[
-            loose_min[0]:loose_max[0]+1,
-            loose_min[1]:loose_max[1]+1,
-            loose_min[2]:loose_max[2]+1
-        ]
-        # Save cropped volume
-        # cropped = np.transpose(cropped, (2, 1, 0))  # back to z,y,x for sitk
-        cropped_img = sitk.GetImageFromArray(cropped)
-        # After cropping and before saving:
-        
-        cropped_img = sitk.GetImageFromArray(cropped)
-        cropped_img.SetSpacing(vol_img.GetSpacing())
-        cropped_img.SetDirection(vol_img.GetDirection())
+        vol_path = os.path.join(case_folder, vol_base)
+        if os.path.exists(vol_path):
+            found = True
+            break
+    if not found:
+        print(f"No matching volume for mask {mask_file}")
+        continue
+    vol_img = sitk.ReadImage(vol_path)
+    vol = sitk.GetArrayFromImage(vol_img)
+    # Crop in (z, y, x) order
+    cropped = vol[
+        zmin:zmax+1,
+        global_ymin:global_ymax+1,
+        global_xmin:global_xmax+1
+    ]
+    # cropped = vol[
+    #     zmin:zmax+1,
+    #     ymin:ymax+1,
+    #     xmin:xmax+1
+    # ]
+    # Debug: check if cropped region is empty
+    if np.count_nonzero(cropped) == 0:
+        print(f"WARNING: Cropped region for {vol_base} is empty!")
+    cropped_img = sitk.GetImageFromArray(cropped)
+    cropped_img.SetSpacing(vol_img.GetSpacing())
+    cropped_img.SetDirection(vol_img.GetDirection())
+    old_origin = np.array(vol_img.GetOrigin())
+    old_spacing = np.array(vol_img.GetSpacing())
+    old_direction = np.array(vol_img.GetDirection()).reshape(3, 3)
+    index_shift = np.array([zmin, global_ymin, global_xmin])
+    new_origin = old_origin + old_direction.dot(index_shift * old_spacing)
+    cropped_img.SetOrigin(tuple(new_origin))
+    out_path = os.path.join(out_dir, os.path.basename(vol_base))
+    sitk.WriteImage(cropped_img, out_path)
+    print(f"Cropped {vol_base} saved with shape: {cropped_img.GetSize()}")
 
-        # Calculate new origin
-        old_origin = np.array(vol_img.GetOrigin())
-        old_spacing = np.array(vol_img.GetSpacing())
-        old_direction = np.array(vol_img.GetDirection()).reshape(3, 3)
-        # loose_min is in (x, y, z) index order
-        index_shift = np.array([loose_min[0], loose_min[1], loose_min[2]])
-        new_origin = old_origin + old_direction.dot(index_shift * old_spacing)
-        cropped_img.SetOrigin(tuple(new_origin))
+    # Crop and save the segmentation mask as well
+    cropped_mask = mask[
+        zmin:zmax+1,
+        global_ymin:global_ymax+1,
+        global_xmin:global_xmax+1
+    ]
+    # cropped_mask = mask[
+    #     zmin:zmax+1,
+    #     ymin:ymax+1,
+    #     xmin:xmax+1
+    # ]
+    # Only keep required labels
+    cropped_mask[~np.isin(cropped_mask, required_labels)] = 0
+    cropped_mask_img = sitk.GetImageFromArray(cropped_mask)
+    cropped_mask_img.CopyInformation(cropped_img)
+    mask_out_path = os.path.join(out_dir, os.path.basename(mask_base))
+    sitk.WriteImage(cropped_mask_img, mask_out_path)
+    print(f"Cropped mask {mask_base} saved with shape: {cropped_mask_img.GetSize()}")
 
-        out_path = os.path.join(out_dir, vol_file_base+ext)
-        sitk.WriteImage(cropped_img, out_path)
-        print(f"Cropped volume {vol_file_base} saved \n with shape:{cropped_img.GetSize()}")
-    print("boxes", boxes)
-print("All done!")
 
-cropped_dir = out_dir
-padded_dir =  os.path.join(script_dir, 'debug/ncct_cect/vindr_ds/padded_volumes')
-os.makedirs(padded_dir, exist_ok=True)
+# # 3. Debug output for unique mask labels and their counts
+# print("\n--- Mask label counts per file ---")
+# for mask_file, label_counts in mask_debug_info:
+#     print(f"{os.path.basename(mask_file)}: {label_counts}")
 
-# 1. Find the target shape
-shapes = []
-for fname in os.listdir(cropped_dir):
-    if fname.endswith('.nii') or fname.endswith('.nii.gz'):
-        img = sitk.ReadImage(os.path.join(cropped_dir, fname))
-        vol = sitk.GetArrayFromImage(img)
-        # vol = np.transpose(vol, (2, 1, 0))
-        shapes.append(vol.shape)
-target_shape = np.max(np.array(shapes), axis=0)
-
-for fname in os.listdir(cropped_dir):
-    if fname.endswith('.nii') or fname.endswith('.nii.gz'):
-        img = sitk.ReadImage(os.path.join(cropped_dir, fname))
-        vol = sitk.GetArrayFromImage(img)
-        # vol = np.transpose(vol, (2, 1, 0))
-        pad_width = [
-            (0, target_shape[0] - vol.shape[0]),
-            (0, target_shape[1] - vol.shape[1]),
-            (0, target_shape[2] - vol.shape[2])
-        ]
-        vol_padded = np.pad(vol, pad_width, mode='constant', constant_values=0)
-        # vol_padded = np.transpose(vol_padded, (2, 1, 0))  # back to z,y,x for sitk
-        padded_img = sitk.GetImageFromArray(vol_padded)
-        
-        padded_img.SetOrigin(img.GetOrigin())
-        padded_img.SetSpacing(img.GetSpacing())
-        padded_img.SetDirection(img.GetDirection())
-
-        sitk.WriteImage(padded_img, os.path.join(padded_dir, fname))
-        print(f"Padded {fname} to shape {padded_img.GetSize()}")
